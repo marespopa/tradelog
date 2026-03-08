@@ -1,0 +1,2 @@
+# tradelog
+Minimalistic Trade Logger
