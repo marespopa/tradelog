@@ -1,2 +1,3 @@
-# tradelog
-Minimalistic Trade Logger
+# Trade
+
+Minimalistic trade assistant price monitor
