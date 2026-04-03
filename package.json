@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^8.3.2",
-    "axios": "^1.13.6",
+    "axios": "1.13.6",
     "ccxt": "^4.5.45",
     "cli-table3": "^0.6.5",
     "colors": "^1.4.0",
