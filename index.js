@@ -1,250 +1,236 @@
 import axios from "axios";
-import Table from "cli-table3";
 import colors from "colors";
 
-const BINANCE_BASE = "https://api.binance.com/api/v3";
-const FEAR_API = "https://api.alternative.me/fng/";
-const APP_NAME = "MARKET TRACKER";
-const VERSION = "v1.1";
-const COIN_LIMIT = 12;
-const EXCLUDE = new Set([
-  "USDT",
-  "USDC",
-  "BUSD",
-  "FDUSD",
-  "DAI",
-  "WBTC",
-  "WETH",
-  "USDS",
-  "PYUSD",
-  "EUR",
-  "EURI",
-  "USD1",
-  "U",
-]);
-
-// --- ANALYTICS ---
-const getMean = (d) => (d.length ? d.reduce((a, b) => a + b, 0) / d.length : 0);
-const getStdDev = (d) => {
-  const mu = getMean(d);
-  return Math.sqrt(getMean(d.map((x) => Math.pow(x - mu, 2))));
+const SYSTEM_CONFIG = {
+  API_BASE_URL: "https://api.binance.com/api/v3",
+  APPLICATION_TITLE: "SCANNER",
+  MAX_DISPLAY_RESULTS: 10,
+  MINIMUM_DAILY_VOLUME: 5_000_000,
+  MARKET_SCAN_DEPTH: 100,
+  STABLECOIN_EXCLUSION_LIST: new Set([
+    "USDT",
+    "USDC",
+    "BUSD",
+    "FDUSD",
+    "DAI",
+    "WBTC",
+    "WETH",
+    "USDS",
+    "PYUSD",
+    "EUR",
+    "EURI",
+    "U",
+    "USD1",
+    "RLUSD",
+    "USTC",
+    "LUSD",
+  ]),
 };
 
-const getRSI = (closes, p = 14) => {
-  if (closes.length < p + 1) return 50;
-  let g = 0,
-    l = 0;
-  for (let i = closes.length - p; i < closes.length; i++) {
-    const d = closes[i] - closes[i - 1];
-    d >= 0 ? (g += d) : (l -= d);
+colors.setTheme({
+  title: ["white", "bold"],
+  ticker: ["white", "bold"],
+  score: ["blue"],
+  signal: ["white"],
+  value: ["white"],
+  tp: ["white"],
+  sl: ["gray"],
+  dim: ["gray"],
+});
+
+// --- TECHNICAL UTILITIES ---
+
+function calculateEMA(series, period) {
+  const k = 2 / (period + 1);
+  return series.reduce((acc, val, idx) =>
+    idx === 0 ? val : val * k + acc * (1 - k),
+  );
+}
+
+function calculateRSI(closes, period = 9) {
+  let gains = 0,
+    losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    diff >= 0 ? (gains += diff) : (losses -= diff);
   }
-  return l === 0 ? 100 : 100 - 100 / (1 + g / l);
-};
+  let avgG = gains / period,
+    avgL = losses / period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    avgG = (avgG * (period - 1) + (diff > 0 ? diff : 0)) / period;
+    avgL = (avgL * (period - 1) + (diff < 0 ? -diff : 0)) / period;
+  }
+  return 100 - 100 / (1 + avgG / avgL);
+}
 
-const getATR = (candles, p = 14) => {
-  const trs = candles.map((c, i) =>
+function calculateADX(highs, lows, closes, period = 14) {
+  let plusDM = [],
+    minusDM = [],
+    tr = [];
+  for (let i = 1; i < highs.length; i++) {
+    const upMove = highs[i] - highs[i - 1];
+    const downMove = lows[i - 1] - lows[i];
+    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    tr.push(
+      Math.max(
+        highs[i] - lows[i],
+        Math.abs(highs[i] - closes[i - 1]),
+        Math.abs(lows[i] - closes[i - 1]),
+      ),
+    );
+  }
+  const sTR = calculateEMA(tr, period);
+  const sPlus = calculateEMA(plusDM, period);
+  const sMinus = calculateEMA(minusDM, period);
+  const diP = (sPlus / sTR) * 100;
+  const diM = (sMinus / sTR) * 100;
+  return Math.abs((diP - diM) / (diP + diM)) * 100;
+}
+
+function calculateATR(highs, lows, closes, period = 14) {
+  let trs = highs.map((h, i) =>
     i === 0
-      ? c.h - c.l
+      ? h - lows[i]
       : Math.max(
-          c.h - c.l,
-          Math.abs(c.h - candles[i - 1].c),
-          Math.abs(c.l - candles[i - 1].c),
+          h - lows[i],
+          Math.abs(h - closes[i - 1]),
+          Math.abs(lows[i] - closes[i - 1]),
         ),
   );
-  return getMean(trs.slice(-p));
-};
+  return trs.slice(-period).reduce((a, b) => a + b) / period;
+}
 
-// --- CORE ENGINE ---
-async function analyzeAsset(symbol, fear, regime, btcTrend) {
+function formatCurrency(v) {
+  return v < 1 ? v.toFixed(6) : v.toFixed(2);
+}
+
+// --- ANALYTICS ENGINE ---
+
+async function performMarketAnalysis(symbol) {
   try {
-    const { data } = await axios.get(`${BINANCE_BASE}/klines`, {
-      params: { symbol, interval: "4h", limit: 200 },
+    const { data } = await axios.get(`${SYSTEM_CONFIG.API_BASE_URL}/klines`, {
+      params: { symbol, interval: "1d", limit: 150 },
     });
 
-    const closes = data.map((c) => +c[4]);
-    const volumes = data.map((c) => +c[5]);
-    const candles = data.map((c) => ({ h: +c[2], l: +c[3], c: +c[4] }));
+    const highs = data.map((d) => parseFloat(d[2]));
+    const lows = data.map((d) => parseFloat(d[3]));
+    const closes = data.map((d) => parseFloat(d[4]));
+    const volumes = data.map((d) => parseFloat(d[7]));
 
-    const curr = closes[closes.length - 1];
-    const rsi = getRSI(closes);
-    const sma20 = getMean(closes.slice(-20));
-    const sma200 = getMean(closes.slice(-200));
-    const z = (curr - sma20) / (getStdDev(closes.slice(-20)) || 0.000001);
+    // QUANT FILTER: Ignore assets with < 1% daily price variance (Filters USD1/Stables)
+    const recentCloses = closes.slice(-10);
+    const volatility =
+      (Math.max(...recentCloses) - Math.min(...recentCloses)) /
+      Math.min(...recentCloses);
+    if (volatility < 0.01) return null;
 
-    // Improved Volume: Current candle vs rolling average of last 20
-    const avgVol = getMean(volumes.slice(-20)) || 1;
-    const volR = volumes[volumes.length - 1] / avgVol;
-    const atr = getATR(candles, 14);
+    const price = closes[closes.length - 1];
+    const ema50 = calculateEMA(closes, 50);
+    const ema200 = calculateEMA(closes, 200);
+    const rsi = calculateRSI(closes);
+    const adx = calculateADX(highs, lows, closes);
+    const atr = calculateATR(highs, lows, closes);
 
-    // --- DYNAMIC SCORING SYSTEM ---
-    let score = 50;
-    let sig = colors.dim("WAIT");
+    const vSlice = volumes.slice(-20);
+    const vAvg = vSlice.reduce((a, b) => a + b) / 20;
+    const vStd = Math.sqrt(
+      vSlice.map((x) => Math.pow(x - vAvg, 2)).reduce((a, b) => a + b) / 20,
+    );
+    const volZ = (volumes[volumes.length - 1] - vAvg) / vStd;
 
-    // 1. Trend Factor
-    if (curr > sma20) score += 10;
-    if (curr > sma200) score += 15;
+    let score = 0;
+    const tags = [];
 
-    // 2. Momentum / Reversion Logic
-    if (regime === "REVERSION") {
-      if (z < -1.5 || rsi < 35) {
-        score += 20;
-        if (z < -2.1 && rsi < 30) {
-          score = 95;
-          sig = colors.green("SNIPE");
-        }
-      }
-    } else if (regime === "MOMENTUM") {
-      if (curr > sma200 && rsi > 50) {
-        score += 15;
-        if (volR > 1.3 && rsi < 70) {
-          score = 90;
-          sig = colors.cyan("BREAK");
-        }
-      }
+    if (price > ema200 && adx > 25) {
+      score += 40;
+      tags.push("Strong Trend");
+    } else if (price > ema200) {
+      score += 20;
+      tags.push("Weak Trend");
     }
 
-    // 3. Volatility Boost
-    if (volR > 2.0) score += 10;
-
-    // 4. Safety Overrides
-    if (rsi > 80 || z > 2.8) {
-      score = 20;
-      sig = colors.red("BLOWOUT");
+    const distToEMA = (price - ema50) / ema50;
+    if (distToEMA > 0 && distToEMA < 0.02) {
+      score += 30;
+      tags.push("EMA50 Bounce");
     }
 
-    // Risk Management
-    const sl = Math.min(...data.slice(-6).map((c) => +c[3])) - atr * 0.1;
-    const tp = curr + (curr - sl) * 2.5;
-
-    let grade = "C";
-    if (score >= 85) grade = "S";
-    else if (score >= 70) grade = "A";
-    else if (score >= 60) grade = "B";
+    if (rsi < 40) {
+      score += 15;
+      tags.push("Oversold");
+    }
+    if (volZ > 2.0) {
+      score += 15;
+      tags.push("Vol Spike");
+    }
 
     return {
-      sym: symbol.replace("USDT", ""),
-      px:
-        curr < 1
-          ? curr.toFixed(5)
-          : curr.toLocaleString(undefined, { minimumFractionDigits: 2 }),
-      stat: `${z > 0 ? "+" : ""}${z.toFixed(1)}σ ${rsi.toFixed(0)}%`,
-      vol: volR.toFixed(1) + "x",
-      sig,
-      targets: `${sl.toFixed(2)} - ${tp.toFixed(2)}`,
+      symbol: symbol.replace("USDT", ""),
+      price,
       score,
-      grade,
-      isBull: curr > sma200,
+      rsi: rsi.toFixed(0),
+      adx: adx.toFixed(0),
+      tags: tags.join(", "),
+      stopLoss: price - atr * 1.5,
+      takeProfit: price + atr * 3.0,
     };
-  } catch {
+  } catch (e) {
     return null;
   }
 }
 
-async function start() {
-  console.clear();
-  process.stdout.write(colors.yellow("⚡ Initiating Scan..."));
+// --- SCANNER EXECUTION ---
 
-  let fear = 50;
-  try {
-    const { data } = await axios.get(FEAR_API);
-    fear = parseInt(data.data[0].value);
-  } catch (e) {}
+async function runScanner() {
+  console.log(colors.dim("Scanning..."));
+  const { data: tickers } = await axios.get(
+    `${SYSTEM_CONFIG.API_BASE_URL}/ticker/24hr`,
+  );
 
-  let btcTrend = "NEUTRAL";
-  try {
-    const { data: btcK } = await axios.get(`${BINANCE_BASE}/klines`, {
-      params: { symbol: "BTCUSDT", interval: "4h", limit: 50 },
-    });
-    const btcCloses = btcK.map((c) => +c[4]);
-    btcTrend =
-      btcCloses[btcCloses.length - 1] > getMean(btcCloses) ? "BULL" : "BEAR";
-  } catch (e) {}
-
-  const { data: tickers } = await axios.get(`${BINANCE_BASE}/ticker/24hr`);
   const pool = tickers
-    .filter(
-      (x) =>
-        x.symbol.endsWith("USDT") &&
-        !EXCLUDE.has(x.symbol.replace("USDT", "")) &&
-        +x.quoteVolume > 15000000,
-    )
+    .filter((t) => {
+      const baseAsset = t.symbol.replace("USDT", "");
+      return (
+        t.symbol.endsWith("USDT") &&
+        !SYSTEM_CONFIG.STABLECOIN_EXCLUSION_LIST.has(baseAsset) && // ACTIVE FILTER
+        parseFloat(t.quoteVolume) > SYSTEM_CONFIG.MINIMUM_DAILY_VOLUME
+      );
+    })
     .sort((a, b) => b.quoteVolume - a.quoteVolume)
-    .slice(0, 60)
-    .map((x) => x.symbol);
+    .slice(0, SYSTEM_CONFIG.MARKET_SCAN_DEPTH);
 
-  // Breadth Check
-  const sample = await Promise.all(
-    pool.slice(0, 20).map((s) => analyzeAsset(s, fear, "NEUTRAL", btcTrend)),
-  );
-  const validSample = sample.filter((r) => r);
-  const bullPct =
-    (validSample.filter((r) => r.isBull).length / validSample.length) * 100;
+  const results = [];
+  for (let i = 0; i < pool.length; i += 10) {
+    const chunk = pool.slice(i, i + 10);
+    const processed = await Promise.all(
+      chunk.map((t) => performMarketAnalysis(t.symbol)),
+    );
+    results.push(...processed.filter((r) => r && r.score >= 40));
+  }
 
-  // Adaptive Regime
-  let regime = fear < 30 ? "REVERSION" : bullPct > 55 ? "MOMENTUM" : "NEUTRAL";
-
-  const results = (
-    await Promise.all(pool.map((s) => analyzeAsset(s, fear, regime, btcTrend)))
-  ).filter((r) => r);
-
-  console.clear();
-  console.log(
-    `\n  ${colors.bold.bgWhite.black(` ${APP_NAME} `)} ${colors.dim(VERSION)}`,
-  );
-  console.log(`  ${colors.dim("─".repeat(36))}`);
-
-  const m = (k, v) => console.log(`  ${colors.dim(k.padEnd(14))} ${v}`);
-  m("Market Phase", colors.bold(regime));
-  m("Fear & Greed", fear < 30 ? colors.red(fear) : colors.green(fear));
-  m(
-    "BTC Anchor",
-    btcTrend === "BULL" ? colors.green("BULLISH") : colors.red("BEARISH"),
-  );
-  m("Breadth", bullPct.toFixed(0) + "% > SMA200");
-  console.log("");
-
-  const table = new Table({
-    head: [
-      "RK",
-      "ASSET",
-      "PRICE",
-      "Z / RSI",
-      "VOL",
-      "SIGNAL",
-      "TARGET RANGE (1:2.5)",
-    ].map((h) => colors.dim(h)),
-    colWidths: [6, 12, 14, 15, 8, 12, 28],
-    chars: { mid: "", "left-mid": "", "mid-mid": "", "right-mid": "" },
-    style: { "padding-left": 1, "padding-right": 1, head: [] },
-  });
-
-  results
-    .sort((a, b) => b.score - a.score)
-    .slice(0, COIN_LIMIT)
-    .forEach((r) => {
-      const gColor =
-        r.grade === "S"
-          ? colors.green
-          : r.grade === "A"
-            ? colors.cyan
-            : r.grade === "B"
-              ? colors.white
-              : colors.dim;
-      table.push([
-        gColor(r.grade),
-        colors.bold(r.sym),
-        r.px,
-        colors.dim(r.stat),
-        r.vol,
-        r.sig,
-        colors.dim(r.targets),
-      ]);
-    });
-
-  console.log(table.toString());
-  console.log(
-    `\n  ${colors.dim(`Scan complete. Strategy adapted to ${regime} conditions.`)}\n`,
+  render(
+    results
+      .sort((a, b) => b.score - a.score)
+      .slice(0, SYSTEM_CONFIG.MAX_DISPLAY_RESULTS),
   );
 }
 
-start();
+function render(data) {
+  console.clear();
+  console.log(`\n ${colors.title(SYSTEM_CONFIG.APPLICATION_TITLE)}`);
+  console.log(` ${colors.dim(new Date().toISOString().substring(0, 10))}\n`);
+
+  data.forEach((s) => {
+    console.log(
+      ` ${colors.ticker(s.symbol.padEnd(8))} ${colors.score(`Score ${s.score}`)} ${colors.dim(`RSI ${s.rsi} | ADX ${s.adx}`)}`,
+    );
+    console.log(` ${colors.signal(s.tags)}`);
+    console.log(
+      ` ${colors.value(`Price ${formatCurrency(s.price)}`)}  ${colors.tp(`Target ${formatCurrency(s.takeProfit)}`)}  ${colors.sl(`Stop ${formatCurrency(s.stopLoss)}`)}\n`,
+    );
+  });
+}
+
+runScanner();
