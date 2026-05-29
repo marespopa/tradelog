@@ -1,39 +1,36 @@
 import axios from "axios";
-import Table from "cli-table3";
 import colors from "colors";
-import readline from "readline";
 
-const BINANCE_BASE = "https://api.binance.com/api/v3";
-
-// --- PARAMETER PARSING ---
-const paramTicker = process.argv[2]
-  ? process.argv[2].toUpperCase().replace("USDT", "")
-  : null;
-const paramEntry = process.argv[3] ? parseFloat(process.argv[3]) : null;
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-const question = (str) => new Promise((resolve) => rl.question(str, resolve));
-
-// --- MATH ENGINE (V9 MERGED) ---
-const getMean = (data) => data.reduce((a, b) => a + b, 0) / data.length;
-const getStdDev = (data) => {
-  const mu = getMean(data);
-  const diffSq = data.map((x) => Math.pow(x - mu, 2));
-  return Math.sqrt(getMean(diffSq));
+const CONFIG = {
+  BASE: "https://api.binance.com/api/v3",
+  BASE_ASSET: "USDT",
+  TIMEFRAME: "1d",
+  INVESTMENT_HORIZON: 50,
 };
-const getRSI = (closes, periods = 14) => {
-  if (closes.length < periods + 1) return 50;
-  let gains = 0,
-    losses = 0;
-  for (let i = closes.length - periods; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1];
-    diff >= 0 ? (gains += diff) : (losses -= diff);
+
+const args = process.argv.slice(2);
+let globalDir = "long";
+const trades = [];
+
+for (const arg of args) {
+  if (arg === "-s" || arg === "--short") globalDir = "short";
+  else if (arg === "-l" || arg === "--long") globalDir = "long";
+  else if (arg.includes("@")) {
+    const [ticker, price] = arg.split("@");
+    trades.push({
+      symbol: ticker.toUpperCase(),
+      entry: parseFloat(price),
+      dir: globalDir,
+    });
   }
-  return losses === 0 ? 100 : 100 - 100 / (1 + gains / losses);
-};
+}
+
+const getSMA = (v) => v.reduce((a, b) => a + b, 0) / v.length;
+const getStdDev = (v, mean) =>
+  Math.sqrt(
+    v.reduce((acc, x) => acc + Math.pow(x - mean, 2), 0) / (v.length - 1),
+  );
+
 const calculateATR = (candles, p = 14) => {
   const trs = candles.map((c, i) =>
     i === 0
@@ -47,129 +44,73 @@ const calculateATR = (candles, p = 14) => {
   return trs.slice(-p).reduce((a, b) => a + b, 0) / p;
 };
 
-async function runAnalysis() {
-  let symbol, entryPrice;
-
-  if (paramTicker) {
-    symbol = paramTicker;
-    entryPrice = paramEntry;
-  } else {
-    console.clear();
-    console.log(
-      colors.bgCyan.black.bold(" TRADER.X | INDIVIDUAL COIN DEEP-DIVE "),
-    );
-    symbol = (await question("\nEnter Ticker (e.g., BTC, SOL): "))
-      .toUpperCase()
-      .replace("USDT", "");
-    const entryInput = await question("Enter Entry Price (Optional): ");
-    entryPrice = entryInput ? parseFloat(entryInput) : null;
-  }
-
-  const ticker = `${symbol}USDT`;
-
+async function analyzeTrade(trade) {
   try {
-    // 250 limit for 4h SMA 200
-    const { data: klines } = await axios.get(`${BINANCE_BASE}/klines`, {
-      params: { symbol: ticker, interval: "4h", limit: 250 },
+    const { data } = await axios.get(`${CONFIG.BASE}/klines`, {
+      params: {
+        symbol: `${trade.symbol}${CONFIG.BASE_ASSET}`,
+        interval: CONFIG.TIMEFRAME,
+        limit: CONFIG.INVESTMENT_HORIZON + 20,
+      },
     });
 
-    const closes = klines.map((c) => +c[4]);
-    const volumes = klines.map((c) => +c[5]);
-    const candles = klines.map((c) => ({ h: +c[2], l: +c[3], c: +c[4] }));
+    const closes = data.map((c) => parseFloat(c[4]));
+    const candles = data.map((c) => ({
+      h: parseFloat(c[2]),
+      l: parseFloat(c[3]),
+      c: parseFloat(c[4]),
+    }));
+
     const current = closes[closes.length - 1];
+    const atr = calculateATR(candles, 14);
 
-    // V9 QUANT METRICS
-    const rsi = getRSI(closes);
-    const sma200 = getMean(closes.slice(-200));
-    const isBullish = current > sma200;
-    const lookback = closes.slice(-20);
-    const sma20 = getMean(lookback);
-    const sd = getStdDev(lookback);
-    const zScore = (current - sma20) / sd;
-    const atr = calculateATR(candles, 20);
-    const squeeze = calculateATR(candles, 5) / calculateATR(candles, 25);
-    const volRelative =
-      volumes[volumes.length - 1] / getMean(volumes.slice(-20));
+    // Calculate PnL
+    const pnl =
+      trade.dir === "short"
+        ? ((trade.entry - current) / trade.entry) * 100
+        : ((current - trade.entry) / trade.entry) * 100;
 
-    // SCORING & GRADING
-    let finalScore = 0;
-    if (squeeze < 0.7 && volRelative > 1.3 && isBullish && rsi < 65)
-      finalScore += 80;
-    else if (zScore < -2.2 && rsi < 30) finalScore += 70;
-    else if (isBullish && zScore > 0.5) finalScore += 40;
-    else finalScore += 10;
+    // Calculate dynamic levels
+    const sl =
+      trade.dir === "short" ? trade.entry + atr * 1.5 : trade.entry - atr * 1.5;
+    const tp =
+      trade.dir === "short" ? trade.entry - atr * 3 : trade.entry + atr * 3;
 
-    if (volRelative > 2.0) finalScore += 15;
-    if (squeeze < 0.6) finalScore += 10;
-    if (rsi < 20 || rsi > 80) finalScore -= 20;
-
-    let grade = "F";
-    if (finalScore >= 90) grade = colors.bgGreen.bold.black(" A+ ");
-    else if (finalScore >= 80) grade = colors.green.bold(" A ");
-    else if (finalScore >= 70) grade = colors.yellow.bold(" B ");
-    else if (finalScore >= 50) grade = colors.white(" C ");
-    else grade = colors.dim(" D ");
-
-    // TABLE OUTPUT
-    const table = new Table({
-      head: [colors.cyan("QUANT METRIC"), colors.cyan("VALUE / STATUS")],
-    });
-
-    table.push(
-      ["Ticker / Grade", `${colors.bold(symbol)} | ${grade}`],
-      ["Price (4H)", `$${current.toFixed(current < 1 ? 6 : 2)}`],
-      [
-        "Trend (SMA 200)",
-        isBullish ? colors.green("BULLISH") : colors.red("BEARISH"),
-      ],
-      ["Z-Score / RSI", `${zScore.toFixed(1)}σ / ${rsi.toFixed(0)}`],
-      ["Rel Volume (Fuel)", `${volRelative.toFixed(1)}x`],
-      ["Squeeze (Coil)", `${squeeze.toFixed(2)}`],
-      ["-----------------", "-----------------"],
-    );
-
-    if (entryPrice) {
-      const profitPct = ((current - entryPrice) / entryPrice) * 100;
-      table.push([
-        "Entry / PNL",
-        `$${entryPrice} / ${profitPct >= 0 ? colors.green(profitPct.toFixed(2) + "%") : colors.red(profitPct.toFixed(2) + "%")}`,
-      ]);
+    // --- DECISION LOGIC ---
+    let action = "HOLD";
+    if (trade.dir === "short") {
+      if (current >= sl) action = "DROP (STOP LOSS)";
+      else if (current <= tp) action = "DROP (TAKE PROFIT)";
+    } else {
+      if (current <= sl) action = "DROP (STOP LOSS)";
+      else if (current >= tp) action = "DROP (TAKE PROFIT)";
     }
 
-    table.push(
-      [
-        "Stop Loss (1.5 ATR)",
-        colors.red(`$${(current - atr * 1.5).toFixed(current < 1 ? 6 : 2)}`),
-      ],
-      [
-        "Take Profit (3 ATR)",
-        colors.green(`$${(current + atr * 3).toFixed(current < 1 ? 6 : 2)}`),
-      ],
+    // --- UI ---
+    const dirCol = trade.dir === "short" ? colors.magenta : colors.cyan;
+    const actionCol = action === "HOLD" ? colors.green : colors.red;
+    const pnlCol = pnl >= 0 ? colors.green : colors.red;
+
+    console.log(
+      `${dirCol.bold(trade.symbol.padEnd(5))} ${colors.bold(trade.dir.toUpperCase())}`,
     );
-
-    console.clear();
-    console.log(colors.bgBlack.white.bold(` DEEP-DIVE REPORT: ${symbol} `));
-    console.log(table.toString());
-
-    // ACTIONABLE NOTE
-    if (finalScore >= 80) {
-      console.log(
-        colors.bgGreen.black(
-          `\n HIGH CONVICTION: This asset meets V9 Alpha criteria for a ${finalScore >= 90 ? "Breakout" : "Solid Entry"}. `,
-        ),
-      );
-    } else if (!isBullish) {
-      console.log(
-        colors.yellow(
-          `\n ⚠️  CAUTION: Asset is below SMA 200. High risk for long positions. `,
-        ),
-      );
-    }
+    console.log(
+      `  Mkt: $${current.toFixed(2)} | PnL: ${pnlCol(pnl.toFixed(2) + "%")}`,
+    );
+    console.log(`  Action: ${actionCol.bold(action)}`);
+    console.log(`  SL: $${sl.toFixed(2)} | TP: $${tp.toFixed(2)}\n`);
   } catch (e) {
-    console.log(colors.red(`\nError: Asset ${ticker} not found or API down.`));
-  } finally {
-    rl.close();
+    console.log(colors.red(`  ${trade.symbol} not found.`));
   }
 }
 
-runAnalysis();
+async function run() {
+  console.clear();
+  if (trades.length === 0)
+    return console.log(
+      "Usage: node coin.js -s NEAR@2.685 BTC@76000 -l ETH@2070",
+    );
+  for (const trade of trades) await analyzeTrade(trade);
+}
+
+run();

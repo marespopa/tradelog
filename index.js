@@ -1,236 +1,322 @@
 import axios from "axios";
-import colors from "colors";
+import http from "http";
+import https from "https";
 
-const SYSTEM_CONFIG = {
-  API_BASE_URL: "https://api.binance.com/api/v3",
-  APPLICATION_TITLE: "SCANNER",
-  MAX_DISPLAY_RESULTS: 10,
-  MINIMUM_DAILY_VOLUME: 5_000_000,
-  MARKET_SCAN_DEPTH: 100,
-  STABLECOIN_EXCLUSION_LIST: new Set([
+const CONFIG = {
+  TITLE: "QUANT ALPHA PROD",
+  BASE: "https://api.binance.com/api/v3",
+  BASE_ASSET: "USDT",
+  EXCLUSIONS: new Set([
     "USDT",
     "USDC",
-    "BUSD",
     "FDUSD",
     "DAI",
     "WBTC",
     "WETH",
-    "USDS",
-    "PYUSD",
+    "USDE",
+    "BUSD",
     "EUR",
-    "EURI",
-    "U",
-    "USD1",
-    "RLUSD",
-    "USTC",
-    "LUSD",
+    "UST",
   ]),
+  MIN_VOLUME: 10_000_000,
+  TIMEFRAME: "1d",
+  INVESTMENT_HORIZON: 50,
+  Z_THRESHOLD: 1.5,
+  CONCURRENCY: 10,
+  TIMEOUT: 5000,
+  MIN_REBOUND_PCT: 1.5,
 };
 
-colors.setTheme({
-  title: ["white", "bold"],
-  ticker: ["white", "bold"],
-  score: ["blue"],
-  signal: ["white"],
-  value: ["white"],
-  tp: ["white"],
-  sl: ["gray"],
-  dim: ["gray"],
+const UI = {
+  CLEAR: "\x1b[2J\x1b[H",
+  RESET: "\x1b[0m",
+  BOLD: "\x1b[1m",
+  DIM: "\x1b[2m",
+  CLEAR_LINE: "\x1b[K",
+  SF_WHITE: "\x1b[38;5;255m",
+  SF_GREY: "\x1b[38;5;244m",
+  SF_DARK: "\x1b[38;5;237m",
+  APPLE_GREEN: "\x1b[38;5;76m",
+  APPLE_RED: "\x1b[38;5;168m",
+  APPLE_BLUE: "\x1b[38;5;33m",
+  LINE_WIDTH: 65,
+};
+
+const client = axios.create({
+  baseURL: CONFIG.BASE,
+  timeout: CONFIG.TIMEOUT,
+  httpAgent: new http.Agent({
+    keepAlive: true,
+    maxSockets: 100,
+    freeSocketTimeout: 30000,
+  }),
+  httpsAgent: new https.Agent({
+    keepAlive: true,
+    maxSockets: 100,
+    freeSocketTimeout: 30000,
+  }),
 });
 
-// --- TECHNICAL UTILITIES ---
+const getSMA = (v) =>
+  v.length === 0 ? 0 : v.reduce((a, b) => a + b, 0) / v.length;
 
-function calculateEMA(series, period) {
-  const k = 2 / (period + 1);
-  return series.reduce((acc, val, idx) =>
-    idx === 0 ? val : val * k + acc * (1 - k),
-  );
-}
+const getStdDev = (v, mean) => {
+  if (v.length <= 1) return 0.001;
+  const variance =
+    v.reduce((acc, x) => acc + Math.pow(x - mean, 2), 0) / (v.length - 1);
+  return variance <= 1e-8 ? 0.001 : Math.sqrt(variance);
+};
 
-function calculateRSI(closes, period = 9) {
-  let gains = 0,
-    losses = 0;
-  for (let i = 1; i <= period; i++) {
-    const diff = closes[i] - closes[i - 1];
-    diff >= 0 ? (gains += diff) : (losses -= diff);
+const getSignalScore = (z, deltaZ, volRatio) => {
+  if (isNaN(z) || !isFinite(z)) return 0.0;
+
+  // Exponential scaling instead of linear clamping ensures extreme moves score higher
+  const intensity = (1 - Math.exp(-Math.abs(z) / 2.0)) * 0.4;
+
+  let reversion = 0.1;
+  if ((z < 0 && deltaZ > 0) || (z > 0 && deltaZ < 0)) {
+    reversion = 0.4;
+  } else if (Math.abs(z) > 2.0 && volRatio > 1.2) {
+    reversion = 0.25;
   }
-  let avgG = gains / period,
-    avgL = losses / period;
-  for (let i = period + 1; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1];
-    avgG = (avgG * (period - 1) + (diff > 0 ? diff : 0)) / period;
-    avgL = (avgL * (period - 1) + (diff < 0 ? -diff : 0)) / period;
-  }
-  return 100 - 100 / (1 + avgG / avgL);
-}
 
-function calculateADX(highs, lows, closes, period = 14) {
-  let plusDM = [],
-    minusDM = [],
-    tr = [];
-  for (let i = 1; i < highs.length; i++) {
-    const upMove = highs[i] - highs[i - 1];
-    const downMove = lows[i - 1] - lows[i];
-    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
-    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
-    tr.push(
-      Math.max(
-        highs[i] - lows[i],
-        Math.abs(highs[i] - closes[i - 1]),
-        Math.abs(lows[i] - closes[i - 1]),
-      ),
-    );
-  }
-  const sTR = calculateEMA(tr, period);
-  const sPlus = calculateEMA(plusDM, period);
-  const sMinus = calculateEMA(minusDM, period);
-  const diP = (sPlus / sTR) * 100;
-  const diM = (sMinus / sTR) * 100;
-  return Math.abs((diP - diM) / (diP + diM)) * 100;
-}
+  const volume = Math.min(volRatio / 2.0, 1.0) * 0.2;
+  return Math.min(Math.max(intensity + reversion + volume, 0.0), 1.0);
+};
 
-function calculateATR(highs, lows, closes, period = 14) {
-  let trs = highs.map((h, i) =>
-    i === 0
-      ? h - lows[i]
-      : Math.max(
-          h - lows[i],
-          Math.abs(h - closes[i - 1]),
-          Math.abs(lows[i] - closes[i - 1]),
-        ),
-  );
-  return trs.slice(-period).reduce((a, b) => a + b) / period;
-}
-
-function formatCurrency(v) {
-  return v < 1 ? v.toFixed(6) : v.toFixed(2);
-}
-
-// --- ANALYTICS ENGINE ---
-
-async function performMarketAnalysis(symbol) {
+async function apiGet(url, params = {}, retries = 3) {
   try {
-    const { data } = await axios.get(`${SYSTEM_CONFIG.API_BASE_URL}/klines`, {
-      params: { symbol, interval: "1d", limit: 150 },
+    return await client.get(url, { params });
+  } catch (err) {
+    const status = err.response?.status;
+    if ((status === 429 || status === 418) && retries > 0) {
+      const wait = parseInt(err.response.headers["retry-after"], 10) || 2;
+      await new Promise((r) => setTimeout(r, wait * 1000));
+      return apiGet(url, params, retries);
+    }
+    if (retries > 0 && (err.code === "ECONNRESET" || status >= 500)) {
+      await new Promise((r) => setTimeout(r, 500));
+      return apiGet(url, params, retries - 1);
+    }
+    throw err;
+  }
+}
+
+async function getMarketsContext() {
+  try {
+    const { data } = await apiGet("/ticker/24hr");
+    const contextMap = new Map();
+
+    for (let i = 0; i < data.length; i++) {
+      const ticker = data[i];
+      if (!ticker.symbol.endsWith(CONFIG.BASE_ASSET)) continue;
+
+      const sym = ticker.symbol.slice(0, -CONFIG.BASE_ASSET.length);
+      if (
+        !CONFIG.EXCLUSIONS.has(sym) &&
+        !sym.includes("USD") &&
+        !sym.includes("EUR") &&
+        parseFloat(ticker.quoteVolume) > CONFIG.MIN_VOLUME
+      ) {
+        contextMap.set(ticker.symbol, {
+          lowPrice: parseFloat(ticker.lowPrice),
+          highPrice: parseFloat(ticker.highPrice),
+        });
+      }
+    }
+    return contextMap;
+  } catch {
+    return new Map();
+  }
+}
+
+async function getMetrics(symbol, marketContext) {
+  try {
+    const context = marketContext.get(symbol);
+    if (!context) return null;
+
+    const { data } = await apiGet("/klines", {
+      symbol,
+      interval: CONFIG.TIMEFRAME,
+      limit: CONFIG.INVESTMENT_HORIZON + 5,
     });
+    if (!Array.isArray(data) || data.length < CONFIG.INVESTMENT_HORIZON + 2)
+      return null;
 
-    const highs = data.map((d) => parseFloat(d[2]));
-    const lows = data.map((d) => parseFloat(d[3]));
     const closes = data.map((d) => parseFloat(d[4]));
-    const volumes = data.map((d) => parseFloat(d[7]));
-
-    // QUANT FILTER: Ignore assets with < 1% daily price variance (Filters USD1/Stables)
-    const recentCloses = closes.slice(-10);
-    const volatility =
-      (Math.max(...recentCloses) - Math.min(...recentCloses)) /
-      Math.min(...recentCloses);
-    if (volatility < 0.01) return null;
-
+    const volumes = data.map((d) => parseFloat(d[5]));
     const price = closes[closes.length - 1];
-    const ema50 = calculateEMA(closes, 50);
-    const ema200 = calculateEMA(closes, 200);
-    const rsi = calculateRSI(closes);
-    const adx = calculateADX(highs, lows, closes);
-    const atr = calculateATR(highs, lows, closes);
 
-    const vSlice = volumes.slice(-20);
-    const vAvg = vSlice.reduce((a, b) => a + b) / 20;
-    const vStd = Math.sqrt(
-      vSlice.map((x) => Math.pow(x - vAvg, 2)).reduce((a, b) => a + b) / 20,
-    );
-    const volZ = (volumes[volumes.length - 1] - vAvg) / vStd;
+    // Synchronize intraday metrics directly to 24-hour ticker context
+    const distanceFromLowPct =
+      context.lowPrice > 0
+        ? ((price - context.lowPrice) / context.lowPrice) * 100
+        : 0;
+    const distanceFromHighPct =
+      context.highPrice > 0
+        ? ((context.highPrice - price) / context.highPrice) * 100
+        : 0;
 
-    let score = 0;
-    const tags = [];
+    // Use stabilized historical slices for baseline metrics
+    const h1 = closes.slice(-CONFIG.INVESTMENT_HORIZON - 1, -1);
+    const sma1 = getSMA(h1);
+    const stdDev1 = getStdDev(h1, sma1);
+    const z1 = (price - sma1) / stdDev1;
 
-    if (price > ema200 && adx > 25) {
-      score += 40;
-      tags.push("Strong Trend");
-    } else if (price > ema200) {
-      score += 20;
-      tags.push("Weak Trend");
-    }
+    const prevPrice = closes[closes.length - 2];
+    const h2 = closes.slice(-CONFIG.INVESTMENT_HORIZON - 2, -2);
+    const sma2 = getSMA(h2);
+    const z2 = (prevPrice - sma2) / getStdDev(h2, sma2);
+    const deltaZ = z1 - z2;
 
-    const distToEMA = (price - ema50) / ema50;
-    if (distToEMA > 0 && distToEMA < 0.02) {
-      score += 30;
-      tags.push("EMA50 Bounce");
-    }
+    const volSMA = getSMA(volumes.slice(-CONFIG.INVESTMENT_HORIZON - 1, -1));
+    const volRatio = volSMA === 0 ? 1 : volumes[volumes.length - 1] / volSMA;
 
-    if (rsi < 40) {
-      score += 15;
-      tags.push("Oversold");
-    }
-    if (volZ > 2.0) {
-      score += 15;
-      tags.push("Vol Spike");
-    }
+    const cleanSymbol = symbol.slice(0, -CONFIG.BASE_ASSET.length);
+    const rawScore = getSignalScore(z1, deltaZ, volRatio);
 
     return {
-      symbol: symbol.replace("USDT", ""),
-      price,
-      score,
-      rsi: rsi.toFixed(0),
-      adx: adx.toFixed(0),
-      tags: tags.join(", "),
-      stopLoss: price - atr * 1.5,
-      takeProfit: price + atr * 3.0,
+      symbol: cleanSymbol,
+      price: price < 1 ? price.toFixed(5) : price.toFixed(2),
+      z: z1.toFixed(2),
+      dz: deltaZ >= 0 ? `+${deltaZ.toFixed(2)}` : deltaZ.toFixed(2),
+      vol: `${volRatio.toFixed(1)}x`,
+      score: `${Math.round(rawScore * 100)}%`,
+      rawZ: z1,
+      rawDz: deltaZ,
+      rawScore,
+      volRatio,
+      distanceFromLowPct,
+      distanceFromHighPct,
     };
-  } catch (e) {
+  } catch {
     return null;
   }
 }
 
-// --- SCANNER EXECUTION ---
+function renderProgressBar(percentage) {
+  const width = 15;
+  const completed = Math.round((percentage / 100) * width);
+  const remaining = Math.max(0, width - completed);
+  return `${UI.SF_WHITE}[${UI.APPLE_BLUE}${"■".repeat(completed)}${UI.SF_DARK}${".".repeat(remaining)}${UI.SF_WHITE}]${UI.RESET}`;
+}
 
-async function runScanner() {
-  console.log(colors.dim("Scanning..."));
-  const { data: tickers } = await axios.get(
-    `${SYSTEM_CONFIG.API_BASE_URL}/ticker/24hr`,
-  );
+function display(state) {
+  const formatLine = (color) => (item) => {
+    if (!item || !item.symbol) return "";
+    const sym = `${UI.BOLD}${UI.SF_WHITE}${item.symbol.padEnd(8)}${UI.RESET}`;
+    const prc = `${UI.SF_GREY}${item.price.padStart(11)}${UI.RESET}`;
+    const zVal = `z: ${color}${item.z.padStart(5)}${UI.RESET}`;
+    const dzVal = `dz: ${parseFloat(item.dz) >= 0 ? UI.APPLE_GREEN : UI.APPLE_RED}${item.dz.padStart(5)}${UI.RESET}`;
+    const vVal = `${UI.DIM}vol: ${item.vol.padStart(5)}${UI.RESET}`;
+    const scr = `${UI.BOLD}${color}${item.score.padStart(5)}${UI.RESET}`;
+    return `  ${sym} ${prc}   ${zVal}  ${dzVal}  ${vVal}  💰 ${scr}${UI.CLEAR_LINE}`;
+  };
 
-  const pool = tickers
-    .filter((t) => {
-      const baseAsset = t.symbol.replace("USDT", "");
-      return (
-        t.symbol.endsWith("USDT") &&
-        !SYSTEM_CONFIG.STABLECOIN_EXCLUSION_LIST.has(baseAsset) && // ACTIVE FILTER
-        parseFloat(t.quoteVolume) > SYSTEM_CONFIG.MINIMUM_DAILY_VOLUME
-      );
-    })
-    .sort((a, b) => b.quoteVolume - a.quoteVolume)
-    .slice(0, SYSTEM_CONFIG.MARKET_SCAN_DEPTH);
+  const numericProgress = parseInt(state.progress, 10) || 0;
+  let out = "\x1b[H";
 
-  const results = [];
-  for (let i = 0; i < pool.length; i += 10) {
-    const chunk = pool.slice(i, i + 10);
-    const processed = await Promise.all(
-      chunk.map((t) => performMarketAnalysis(t.symbol)),
+  out += `${UI.BOLD}${UI.SF_WHITE}${CONFIG.TITLE.padEnd(18)}${UI.RESET}`;
+  out += `${UI.SF_GREY}${state.status.padStart(20)}${UI.RESET}  `;
+  out += `${renderProgressBar(numericProgress)} ${UI.SF_GREY}${state.progress.padStart(4)}${UI.RESET}${UI.CLEAR_LINE}\n`;
+  out += `${UI.SF_DARK}${"─".repeat(UI.LINE_WIDTH)}${UI.RESET}${UI.CLEAR_LINE}\n\n`;
+
+  out += `  ${UI.BOLD}${UI.APPLE_GREEN}▲  OVERSOLD / BUY TARGETS (CONFIRMED BOTTOMS)${UI.RESET}${UI.CLEAR_LINE}\n`;
+  const buyItems = state.buys.slice(0, 8);
+  out += buyItems.length
+    ? buyItems.map(formatLine(UI.APPLE_GREEN)).join("\n") + "\n"
+    : `    ${UI.DIM}No high-probability reversal targets triggered.${UI.RESET}${UI.CLEAR_LINE}\n`;
+  out += `${UI.CLEAR_LINE}\n`;
+
+  out += `  ${UI.BOLD}${UI.APPLE_RED}▼  OVERBOUGHT / SELL TARGETS (FADING MOMENTUM)${UI.RESET}${UI.CLEAR_LINE}\n`;
+  const sellItems = state.sells.slice(0, 8);
+  out += sellItems.length
+    ? sellItems.map(formatLine(UI.APPLE_RED)).join("\n") + "\n"
+    : `    ${UI.DIM}No exhausted distribution targets triggered.${UI.RESET}${UI.CLEAR_LINE}\n`;
+  out += `${UI.CLEAR_LINE}\n`;
+
+  process.stdout.write(out);
+}
+
+async function run() {
+  const state = { status: "Initializing", progress: "0%", buys: [], sells: [] };
+  process.stdout.write(UI.CLEAR);
+
+  const marketContext = await getMarketsContext();
+  const assets = Array.from(marketContext.keys());
+
+  if (!assets.length) {
+    console.log(
+      `${UI.APPLE_RED}Error: Operational liquidity maps empty.${UI.RESET}`,
     );
-    results.push(...processed.filter((r) => r && r.score >= 40));
+    process.exit(1);
   }
 
-  render(
-    results
-      .sort((a, b) => b.score - a.score)
-      .slice(0, SYSTEM_CONFIG.MAX_DISPLAY_RESULTS),
+  const uiInterval = setInterval(() => display(state), 100);
+  let currentCursor = 0;
+
+  const executeWorker = async () => {
+    while (true) {
+      const idx = currentCursor++;
+      if (idx >= assets.length) break;
+
+      const targetSymbol = assets[idx];
+      const cleanLabel = targetSymbol.slice(0, -CONFIG.BASE_ASSET.length);
+
+      state.status = `Scouting ${cleanLabel}`;
+      state.progress = `${Math.round((idx / assets.length) * 100)}%`;
+
+      const metric = await getMetrics(targetSymbol, marketContext);
+      if (metric) {
+        if (metric.rawZ < -CONFIG.Z_THRESHOLD) {
+          const hasStructuralRebound =
+            metric.distanceFromLowPct >= CONFIG.MIN_REBOUND_PCT;
+          const isFallingKnife = metric.rawDz <= 0;
+          const isUnabsorbedCapitulation =
+            metric.volRatio > 3.0 && metric.rawDz < 0.2;
+
+          if (
+            hasStructuralRebound &&
+            !isFallingKnife &&
+            !isUnabsorbedCapitulation &&
+            (metric.volRatio > 1.2 || metric.rawDz > 0)
+          ) {
+            state.buys.push(metric);
+          }
+        } else if (metric.rawZ > CONFIG.Z_THRESHOLD) {
+          const isRunawayTrain = metric.rawDz > 0.8 && metric.volRatio > 2.0;
+          const hasRejectedHigh = metric.distanceFromHighPct >= 1.0;
+
+          if (
+            !isRunawayTrain &&
+            hasRejectedHigh &&
+            (metric.rawDz < 0 || metric.volRatio >= 2.5)
+          ) {
+            state.sells.push(metric);
+          }
+        }
+      }
+    }
+  };
+
+  const poolingQueue = Array.from(
+    { length: CONFIG.CONCURRENCY },
+    executeWorker,
   );
+  await Promise.all(poolingQueue);
+
+  // High Performance Optimization: Sort precisely once upon full sequence resolution
+  state.buys.sort((a, b) => b.rawScore - a.rawScore);
+  state.sells.sort((a, b) => b.rawScore - a.rawScore);
+
+  clearInterval(uiInterval);
+
+  state.status = "Complete";
+  state.progress = "100%";
+  display(state);
+
+  process.stdout.write("\n\n");
+  process.exit(0);
 }
 
-function render(data) {
-  console.clear();
-  console.log(`\n ${colors.title(SYSTEM_CONFIG.APPLICATION_TITLE)}`);
-  console.log(` ${colors.dim(new Date().toISOString().substring(0, 10))}\n`);
-
-  data.forEach((s) => {
-    console.log(
-      ` ${colors.ticker(s.symbol.padEnd(8))} ${colors.score(`Score ${s.score}`)} ${colors.dim(`RSI ${s.rsi} | ADX ${s.adx}`)}`,
-    );
-    console.log(` ${colors.signal(s.tags)}`);
-    console.log(
-      ` ${colors.value(`Price ${formatCurrency(s.price)}`)}  ${colors.tp(`Target ${formatCurrency(s.takeProfit)}`)}  ${colors.sl(`Stop ${formatCurrency(s.stopLoss)}`)}\n`,
-    );
-  });
-}
-
-runScanner();
+run();
