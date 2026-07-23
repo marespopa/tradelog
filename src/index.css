@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --c-bg: #f7f5fb;
+  --c-panel: #ffffff;
+  --c-panel-alt: rgba(124, 111, 224, 0.06);
+  --c-panel-raised: #ffffff;
+  --c-border: rgba(44, 32, 86, 0.1);
+  --c-text: #2c2a3a;
+  --c-dim: #6f6c82;
+  --c-long: #1f9d6b;
+  --c-short: #d9534f;
+  --c-accent: #7c6fe0;
+  --c-warn: #b8701f;
+  --c-shadow: 0 8px 30px rgba(90, 70, 160, 0.08);
+
+  /* Fixed categorical order for per-asset charts — assigned by asset
+     identity (native ETH, then ARBITRUM_TOKENS order), never by rank, so a
+     token's color doesn't change as balances shift. */
+  --chart-1: #2a78d6;
+  --chart-2: #1baf7a;
+  --chart-3: #eda100;
+  --chart-4: #008300;
+  --chart-5: #4a3aa7;
+  --chart-6: #e34948;
+  --chart-7: #e87ba4;
+  --chart-8: #eb6834;
+}
+
+.dark {
+  --c-bg: #14131f;
+  --c-panel: #1e1c2b;
+  --c-panel-alt: rgba(255, 255, 255, 0.05);
+  --c-panel-raised: #262436;
+  --c-border: rgba(255, 255, 255, 0.1);
+  --c-text: #f2f0fa;
+  --c-dim: #a9a6c0;
+  --c-long: #22a86d;
+  --c-short: #d9534f;
+  --c-accent: #8f7ff0;
+  --c-warn: #b8791a;
+  --c-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+
+  --chart-1: #3987e5;
+  --chart-2: #199e70;
+  --chart-3: #c98500;
+  --chart-4: #008300;
+  --chart-5: #9085e9;
+  --chart-6: #e66767;
+  --chart-7: #d55181;
+  --chart-8: #d95926;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--c-accent) 30%, transparent);
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeInUp 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes flashUp {
+  0% { background-color: color-mix(in srgb, var(--c-long) 35%, transparent); }
+  100% { background-color: transparent; }
+}
+@keyframes flashDown {
+  0% { background-color: color-mix(in srgb, var(--c-short) 35%, transparent); }
+  100% { background-color: transparent; }
+}
+.flash-up { animation: flashUp 0.7s ease-out; }
+.flash-down { animation: flashDown 0.7s ease-out; }
+
+/* Thin, unobtrusive scrollbars for horizontally-scrolling tables */
+.table-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-border) transparent;
+}
+.table-scroll::-webkit-scrollbar { height: 8px; }
+.table-scroll::-webkit-scrollbar-track { background: transparent; }
+.table-scroll::-webkit-scrollbar-thumb {
+  background: var(--c-border);
+  border-radius: 999px;
+}
+.table-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--c-dim);
+}

@@ -1,0 +1,139 @@
+// Public OKX market data — no API key needed, fetched straight from the
+// browser (same no-backend approach used elsewhere in this app; OKX's public
+// REST endpoints allow CORS for market data).
+const BAR_MAP = { "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "1w": "1W" };
+export const TIMEFRAMES = Object.keys(BAR_MAP);
+
+// OKX's public market-data endpoints rate-limit around 20 req/2s per IP —
+// every caller that fans out one fetch per symbol (Setup Finder's ~100-pair
+// scan, the watchlist re-check, the portfolio's per-holding grading) shares
+// this instead of firing its own unbounded Promise.all, so concurrent scans
+// don't stack past the limit and start failing with 429s.
+const RATE_LIMIT_BATCH_SIZE = 10;
+
+export async function scanInBatches(items, fn) {
+  const results = [];
+  for (let i = 0; i < items.length; i += RATE_LIMIT_BATCH_SIZE) {
+    const batch = items.slice(i, i + RATE_LIMIT_BATCH_SIZE);
+    results.push(...(await Promise.allSettled(batch.map(fn))));
+  }
+  return results;
+}
+
+export async function fetchCandles(symbol, timeframe, limit = 300) {
+  const bar = BAR_MAP[timeframe];
+  if (!bar) throw new Error(`Unsupported timeframe: ${timeframe}`);
+  const instId = `${symbol.toUpperCase()}-USDT`;
+  const url = `https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
+  const json = await res.json();
+  if (json.code !== "0") throw new Error(json.msg || "OKX returned an error");
+  if (!json.data?.length) throw new Error(`No candle data for ${instId} — check the symbol`);
+
+  // OKX returns newest-first: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
+  return json.data
+    .slice()
+    .reverse()
+    .map(([ts, open, high, low, close, volume]) => ({
+      time: Number(ts),
+      open: Number(open),
+      high: Number(high),
+      low: Number(low),
+      close: Number(close),
+      volume: Number(volume),
+    }));
+}
+
+// OKX's /market/candles endpoint caps at 300 bars per request regardless of
+// the `limit` asked for — anything needing more history (e.g. fxnxSetup.js's
+// 320-bar warmup for its D1 EMA50) has to page through /market/history-candles
+// instead via its `after` cursor.
+export async function fetchCandleHistory(symbol, timeframe, totalBars) {
+  const bar = BAR_MAP[timeframe];
+  if (!bar) throw new Error(`Unsupported timeframe: ${timeframe}`);
+  const instId = `${symbol.toUpperCase()}-USDT`;
+  const all = [];
+  let after;
+  while (all.length < totalBars) {
+    const url = new URL("https://www.okx.com/api/v5/market/history-candles");
+    url.searchParams.set("instId", instId);
+    url.searchParams.set("bar", bar);
+    url.searchParams.set("limit", "100");
+    if (after) url.searchParams.set("after", after);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
+    const json = await res.json();
+    if (json.code !== "0") throw new Error(json.msg || "OKX returned an error");
+    if (!json.data?.length) break;
+    all.push(...json.data);
+    after = json.data.at(-1)[0];
+    if (json.data.length < 100) break;
+  }
+  return all
+    .map(([ts, open, high, low, close, volume]) => ({
+      time: Number(ts),
+      open: Number(open),
+      high: Number(high),
+      low: Number(low),
+      close: Number(close),
+      volume: Number(volume),
+    }))
+    .sort((a, b) => a.time - b.time);
+}
+
+// Latest traded price for one symbol — used for Portfolio USD valuation.
+export async function fetchTickerPrice(symbol) {
+  const url = `https://www.okx.com/api/v5/market/ticker?instId=${symbol.toUpperCase()}-USDT`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
+  const json = await res.json();
+  if (json.code !== "0" || !json.data?.length) throw new Error(json.msg || `No price for ${symbol}`);
+  return Number(json.data[0].last);
+}
+
+// 24h volume ($) and change (%) for one symbol — the liquidity/participation
+// context Setup Finder's market scan shows per-row but the single-coin
+// Analysis view otherwise lacks; relevant for sizing a position trade since
+// thin liquidity makes a wide stop/target harder to fill without slippage.
+export async function fetchTicker24h(symbol) {
+  const url = `https://www.okx.com/api/v5/market/ticker?instId=${symbol.toUpperCase()}-USDT`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
+  const json = await res.json();
+  if (json.code !== "0" || !json.data?.length) throw new Error(json.msg || `No ticker for ${symbol}`);
+  const t = json.data[0];
+  return {
+    volUsd24h: Number(t.volCcy24h),
+    changePct24h: Number(t.open24h) > 0 ? ((Number(t.last) - Number(t.open24h)) / Number(t.open24h)) * 100 : null,
+  };
+}
+
+// Stablecoins pegged near $1 produce meaningless trend/RSI/score noise —
+// excluded from the scan rather than evaluated as if they were a directional
+// setup.
+const STABLECOIN_SYMBOLS = new Set(["USDC", "USDT", "DAI", "TUSD", "USDP", "FDUSD", "PYUSD", "USDE", "GUSD", "EURC"]);
+
+// Top-volume USDT spot pairs, for the Setup Finder scan — avoids hardcoding a
+// symbol list by asking OKX for whatever's actually liquid right now. Returns
+// the raw 24h volume ($) and 24h change (%) alongside each symbol so the scan
+// can offer neutral sort/filter by those, not just by the analysis stats.
+export async function fetchTopVolumeTickers(limit = 20) {
+  const url = "https://www.okx.com/api/v5/market/tickers?instType=SPOT";
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
+  const json = await res.json();
+  if (json.code !== "0") throw new Error(json.msg || "OKX returned an error");
+
+  return json.data
+    .filter((t) => t.instId.endsWith("-USDT"))
+    .map((t) => ({
+      symbol: t.instId.replace("-USDT", ""),
+      volUsd24h: Number(t.volCcy24h),
+      changePct24h: Number(t.open24h) > 0 ? ((Number(t.last) - Number(t.open24h)) / Number(t.open24h)) * 100 : null,
+    }))
+    .filter((t) => !STABLECOIN_SYMBOLS.has(t.symbol))
+    .sort((a, b) => b.volUsd24h - a.volUsd24h)
+    .slice(0, limit);
+}
