@@ -2,7 +2,9 @@ import { useMemo } from "react";
 import DataTable from "./DataTable.jsx";
 import WatchButton from "./WatchButton.jsx";
 import { useSetupFinder } from "../hooks/useSetupFinder.js";
+import { useLivePrices } from "../hooks/useLivePrices.js";
 import { buildScanColumns } from "../lib/scanColumns.jsx";
+import { fmtPrice } from "../lib/format.jsx";
 
 // Shares the setup-finder query (same queryKey/limit) with ScanPanel, so
 // opening the watchlist doesn't trigger a second scan — it just re-filters
@@ -25,6 +27,8 @@ export default function WatchlistPanel({ watchlist, onSelectSymbol }) {
     () => watchlist.symbols.filter((symbol) => !scanBySymbol.has(symbol)),
     [watchlist.symbols, scanBySymbol]
   );
+
+  const { data: unscannedPrices, isLoading: pricesLoading } = useLivePrices(unscanned);
 
   const columns = useMemo(() => buildScanColumns(watchlist), [watchlist]);
 
@@ -61,19 +65,25 @@ export default function WatchlistPanel({ watchlist, onSelectSymbol }) {
           {unscanned.length > 0 && (
             <div className="border-t border-edge/70 px-5 py-3 text-[12px] text-dim">
               <p className="mb-2">Watched but outside the top-volume scan:</p>
-              <div className="flex flex-wrap gap-2">
-                {unscanned.map((symbol) => (
-                  <button
-                    key={symbol}
-                    type="button"
-                    onClick={() => onSelectSymbol?.(symbol)}
-                    className="flex items-center gap-1.5 rounded-full border border-edge bg-panel-alt px-2.5 py-1 text-ink transition-colors duration-150 hover:bg-panel-raised"
-                  >
-                    <WatchButton active onToggle={() => watchlist.toggle(symbol)} />
-                    {symbol}
-                  </button>
-                ))}
-              </div>
+              <table className="w-full border-collapse text-[13px]">
+                <tbody>
+                  {unscanned.map((symbol) => (
+                    <tr
+                      key={symbol}
+                      onClick={() => onSelectSymbol?.(symbol)}
+                      className="cursor-pointer border-b border-edge/50 last:border-0 hover:bg-panel-alt"
+                    >
+                      <td className="w-8 py-1.5">
+                        <WatchButton active onToggle={() => watchlist.toggle(symbol)} />
+                      </td>
+                      <td className="py-1.5 pr-3 text-ink">{symbol}</td>
+                      <td className="py-1.5 text-right tabular-nums text-ink">
+                        {pricesLoading ? "…" : fmtPrice(unscannedPrices?.get(symbol))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </>

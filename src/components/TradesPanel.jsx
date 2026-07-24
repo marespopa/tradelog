@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import DataTable from "./DataTable.jsx";
 import { buildTradeColumns } from "../lib/tradeColumns.jsx";
+import { useLivePrices } from "../hooks/useLivePrices.js";
 import { fmtDurationExact, fmtPrice, fmtRiskReward } from "../lib/format.jsx";
 
 const OUTCOME_SUGGESTIONS = [
@@ -486,6 +487,14 @@ export default function TradesPanel({ trades }) {
   const closingTrade = trades.trades.find((t) => t.id === closingId) ?? null;
   const columns = buildTradeColumns(trades.remove, setClosingId);
 
+  const symbols = useMemo(() => [...new Set(trades.trades.map((t) => t.symbol))], [trades.trades]);
+  const { data: livePrices } = useLivePrices(symbols);
+
+  const rows = useMemo(
+    () => trades.trades.map((t) => ({ ...t, currentPrice: livePrices?.get(t.symbol) ?? null })),
+    [trades.trades, livePrices]
+  );
+
   return (
     <div className="flex flex-col gap-5">
       <RecentTradeCard trade={trades.recent} streak={trades.streak} />
@@ -511,7 +520,7 @@ export default function TradesPanel({ trades }) {
 
         <DataTable
           columns={columns}
-          data={trades.trades}
+          data={rows}
           emptyText="No trades logged yet"
           pageSize={20}
           initialSort={{ key: "exitTime", dir: -1 }}
