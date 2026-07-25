@@ -1,24 +1,34 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getStore } from "../lib/tauriStore";
 
-const WATCHLIST_KEY = "alpha-scout-watchlist";
+const WATCHLIST_KEY = "watchlist";
 
-function readWatchlist() {
-  try {
-    const raw = localStorage.getItem(WATCHLIST_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-// Selected coins from the scan or analysis page, persisted locally so the
-// list survives reloads without needing a backend.
+// Selected coins from the scan or analysis page, persisted to a JSON file
+// on disk via the Tauri store plugin so the list survives reloads without
+// needing a backend.
 export function useWatchlist() {
-  const [symbols, setSymbols] = useState(readWatchlist);
+  const [symbols, setSymbols] = useState([]);
+  const loaded = useRef(false);
 
   useEffect(() => {
-    localStorage.setItem(WATCHLIST_KEY, JSON.stringify(symbols));
+    let cancelled = false;
+    getStore().then(async (store) => {
+      const saved = await store.get(WATCHLIST_KEY);
+      if (cancelled) return;
+      if (Array.isArray(saved)) setSymbols(saved);
+      loaded.current = true;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!loaded.current) return;
+    getStore().then((store) => {
+      store.set(WATCHLIST_KEY, symbols);
+      store.save();
+    });
   }, [symbols]);
 
   const has = useCallback((symbol) => symbols.includes(symbol), [symbols]);

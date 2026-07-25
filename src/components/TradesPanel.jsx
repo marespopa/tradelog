@@ -4,13 +4,7 @@ import DataTable from "./DataTable.jsx";
 import { buildTradeColumns } from "../lib/tradeColumns.jsx";
 import { useLivePrices } from "../hooks/useLivePrices.js";
 import { fmtDurationExact, fmtPrice, fmtRiskReward } from "../lib/format.jsx";
-
-const OUTCOME_SUGGESTIONS = [
-  "Win",
-  "Stopped out",
-  "TP1 · breakeven",
-  "TP2 · final",
-];
+import { parseOkxOrder } from "../lib/okxOrder.js";
 
 function leveragedPct(trade) {
   const { entryPrice, exitPrice, side, leverage } = trade;
@@ -25,7 +19,7 @@ function formatR(r) {
   return `${r >= 0 ? "+" : ""}${r.toFixed(r % 1 === 0 ? 0 : 2)}R`;
 }
 
-function RecentTradeCard({ trade, streak }) {
+function RecentTradeCard({ trade }) {
   if (!trade) {
     return (
       <div className="rounded-card border border-edge bg-panel p-5 shadow-card">
@@ -91,12 +85,10 @@ function RecentTradeCard({ trade, streak }) {
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-wide text-dim">
-            Streak
+            Outcome
           </div>
-          <div className="mt-0.5 text-ink">
-            {streak.of > 0
-              ? `${streak.wins}/${streak.of} streak${streak.wins === streak.of ? " 🎯" : ""}`
-              : "—"}
+          <div className={`mt-0.5 ${positive ? "text-position-long" : "text-position-short"}`}>
+            {trade.outcome ?? "—"}
           </div>
         </div>
       </div>
@@ -114,16 +106,33 @@ const emptyForm = {
   exitTime: "",
   stopLoss: "",
   targetPrice: "",
-  outcome: "",
-  resultR: "",
   stillOpen: false,
 };
 
 function AddTradeForm({ onAdd }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteNotice, setPasteNotice] = useState("");
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+
+  const fillFromPaste = () => {
+    const parsed = parseOkxOrder(pasteText);
+    if (!parsed) {
+      setPasteNotice("Couldn't find order details in that text.");
+      return;
+    }
+    setForm((f) => ({
+      ...f,
+      symbol: parsed.symbol ?? f.symbol,
+      side: parsed.side ?? f.side,
+      entryPrice: parsed.entryPrice != null ? String(parsed.entryPrice) : f.entryPrice,
+      stopLoss: parsed.stopLoss != null ? String(parsed.stopLoss) : f.stopLoss,
+      targetPrice: parsed.targetPrice != null ? String(parsed.targetPrice) : f.targetPrice,
+    }));
+    setPasteNotice("Filled from OKX order — check the fields below.");
+  };
 
   const submit = (e) => {
     e.preventDefault();
@@ -142,10 +151,10 @@ function AddTradeForm({ onAdd }) {
       stopLoss: form.stopLoss === "" ? null : parseFloat(form.stopLoss),
       targetPrice:
         form.targetPrice === "" ? null : parseFloat(form.targetPrice),
-      outcome: form.outcome,
-      resultR: form.resultR === "" ? null : parseFloat(form.resultR),
     });
     setForm(emptyForm);
+    setPasteText("");
+    setPasteNotice("");
     setOpen(false);
   };
 
@@ -174,6 +183,31 @@ function AddTradeForm({ onAdd }) {
             className="flex max-h-[90vh] w-full max-w-2xl flex-col gap-3 overflow-y-auto rounded-card border border-edge bg-panel p-5 shadow-card"
           >
             <h2 className="text-[14px] font-semibold">Add trade</h2>
+
+            <label className="flex flex-col gap-1 text-[11px] text-dim">
+              Paste an OKX order ticket (optional)
+              <textarea
+                value={pasteText}
+                onChange={(e) => {
+                  setPasteText(e.target.value);
+                  setPasteNotice("");
+                }}
+                placeholder={"e.g. Price\n1,855.11 USD\nAmount\n0.053905 ETH\nTP trigger price\n1,921.76 USD\nSL trigger price\n1,821.61 USD"}
+                rows={2}
+                className={`resize-none ${inputClass}`}
+              />
+            </label>
+            <div className="-mt-1 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={fillFromPaste}
+                disabled={!pasteText.trim()}
+                className="rounded-lg border border-edge px-2.5 py-1 text-[12px] font-medium text-ink hover:bg-panel-alt disabled:opacity-40"
+              >
+                Fill from OKX order
+              </button>
+              {pasteNotice && <span className="text-[12px] text-dim">{pasteNotice}</span>}
+            </div>
 
             <div className="flex flex-wrap items-end gap-3">
               <label className="flex flex-col gap-1 text-[11px] text-dim">
@@ -303,46 +337,15 @@ function AddTradeForm({ onAdd }) {
               </label>
 
               {!form.stillOpen && (
-                <>
-                  <label className="flex flex-col gap-1 text-[11px] text-dim">
-                    Exit time
-                    <input
-                      type="datetime-local"
-                      value={form.exitTime}
-                      onChange={set("exitTime")}
-                      className={inputClass}
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1 text-[11px] text-dim">
-                    Outcome
-                    <input
-                      type="text"
-                      list="outcome-suggestions"
-                      value={form.outcome}
-                      onChange={set("outcome")}
-                      placeholder="e.g. TP2 · final"
-                      className={`w-40 ${inputClass}`}
-                    />
-                    <datalist id="outcome-suggestions">
-                      {OUTCOME_SUGGESTIONS.map((o) => (
-                        <option key={o} value={o} />
-                      ))}
-                    </datalist>
-                  </label>
-
-                  <label className="flex flex-col gap-1 text-[11px] text-dim">
-                    Result (R)
-                    <input
-                      type="number"
-                      step="any"
-                      value={form.resultR}
-                      onChange={set("resultR")}
-                      placeholder="e.g. 1.5 or -1"
-                      className={`w-24 ${inputClass}`}
-                    />
-                  </label>
-                </>
+                <label className="flex flex-col gap-1 text-[11px] text-dim">
+                  Exit time
+                  <input
+                    type="datetime-local"
+                    value={form.exitTime}
+                    onChange={set("exitTime")}
+                    className={inputClass}
+                  />
+                </label>
               )}
             </div>
 
@@ -357,6 +360,8 @@ function AddTradeForm({ onAdd }) {
                 type="button"
                 onClick={() => {
                   setForm(emptyForm);
+                  setPasteText("");
+                  setPasteNotice("");
                   setOpen(false);
                 }}
                 className="rounded-lg px-3 py-1.5 text-[13px] text-dim hover:text-ink"
@@ -375,13 +380,19 @@ function AddTradeForm({ onAdd }) {
 const emptyCloseForm = {
   exitPrice: "",
   exitTime: "",
-  outcome: "",
-  resultR: "",
 };
 
 function CloseTradeDialog({ trade, onClose, onCancel }) {
   const [form, setForm] = useState(emptyCloseForm);
+  const [pasteText, setPasteText] = useState("");
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+
+  const fillFromPaste = () => {
+    const parsed = parseOkxOrder(pasteText);
+    if (parsed?.entryPrice != null) {
+      setForm((f) => ({ ...f, exitPrice: String(parsed.entryPrice) }));
+    }
+  };
 
   const submit = (e) => {
     e.preventDefault();
@@ -390,8 +401,6 @@ function CloseTradeDialog({ trade, onClose, onCancel }) {
       exitTime: form.exitTime
         ? new Date(form.exitTime).toISOString()
         : new Date().toISOString(),
-      outcome: form.outcome,
-      resultR: form.resultR === "" ? null : parseFloat(form.resultR),
     });
   };
 
@@ -407,6 +416,25 @@ function CloseTradeDialog({ trade, onClose, onCancel }) {
         <h2 className="text-[14px] font-semibold">
           Close {trade.symbol} <span className="text-dim">({trade.side})</span>
         </h2>
+
+        <label className="flex flex-col gap-1 text-[11px] text-dim">
+          Paste an OKX order ticket (optional)
+          <textarea
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)}
+            placeholder="e.g. Price&#10;1,921.76 USD"
+            rows={2}
+            className={`resize-none ${inputClass}`}
+          />
+        </label>
+        <button
+          type="button"
+          onClick={fillFromPaste}
+          disabled={!pasteText.trim()}
+          className="-mt-1 self-start rounded-lg border border-edge px-2.5 py-1 text-[12px] font-medium text-ink hover:bg-panel-alt disabled:opacity-40"
+        >
+          Fill from OKX order
+        </button>
 
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-[11px] text-dim">
@@ -430,36 +458,7 @@ function CloseTradeDialog({ trade, onClose, onCancel }) {
               className={inputClass}
             />
           </label>
-
-          <label className="flex flex-col gap-1 text-[11px] text-dim">
-            Result (R)
-            <input
-              type="number"
-              step="any"
-              value={form.resultR}
-              onChange={set("resultR")}
-              placeholder="e.g. 1.5 or -1"
-              className={`w-24 ${inputClass}`}
-            />
-          </label>
         </div>
-
-        <label className="flex flex-col gap-1 text-[11px] text-dim">
-          Outcome
-          <input
-            type="text"
-            list="outcome-suggestions"
-            value={form.outcome}
-            onChange={set("outcome")}
-            placeholder="e.g. TP2 · final"
-            className={inputClass}
-          />
-          <datalist id="outcome-suggestions">
-            {OUTCOME_SUGGESTIONS.map((o) => (
-              <option key={o} value={o} />
-            ))}
-          </datalist>
-        </label>
 
         <div className="flex items-center gap-2">
           <button
@@ -497,7 +496,7 @@ export default function TradesPanel({ trades }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <RecentTradeCard trade={trades.recent} streak={trades.streak} />
+      <RecentTradeCard trade={trades.recent} />
 
       <AddTradeForm onAdd={trades.add} />
 

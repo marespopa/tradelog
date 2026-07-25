@@ -4,7 +4,7 @@ A quant-style trend/setup scanner for the top-volume crypto pairs, with a per-sy
 
 ## How it works
 
-This is a pure client-side app — there is no backend. Market/price data comes from OKX's public API (spot tickers/candles), with GeckoTerminal on-chain data as a fallback in the Analysis view for symbols OKX doesn't list. Watchlist and trade-journal entries are persisted in `localStorage`, so they survive reloads without needing a backend.
+This is a pure client-side app — there is no backend. Market/price data comes from OKX's public API (spot tickers/candles); only symbols listed on OKX are shown. It ships as a Tauri desktop app; trades and the watchlist are persisted to a JSON file in the OS app-data directory (via the Tauri store plugin), so they survive restarts without needing a backend.
 
 ## Setup
 
@@ -13,12 +13,21 @@ npm install
 npm run dev
 ```
 
+## Desktop app (Tauri)
+
+Prerequisites: [Rust](https://rustup.rs) and, on Windows, the MSVC C++ Build Tools ("Desktop development with C++" workload in Visual Studio Build Tools).
+
+```bash
+npm run tauri:dev    # launch the desktop app in development
+npm run tauri:build  # produce an installer under src-tauri/target/release/bundle/
+```
+
 ## Features
 
 - **Scan** — scans top-volume pairs on 4H structure (trend, RSI, z-score, relative volume, ATR%, 24h change). Click a row to drill into Analysis.
 - **Watchlist** — star coins from the scan or analysis page to track them here. Watched pairs inside the top-volume scan show the full scan stats; pairs outside it (low-volume/illiquid) still get their live OKX price fetched directly, in their own table below.
-- **Analysis** — a per-symbol trend/RSI/setup narrative with a live chart and timeframe switcher (15m–1W). Falls back to GeckoTerminal on-chain data for symbols OKX doesn't list.
-- **Trades** — a manual trade journal (entry/exit, side, leverage, stop/target, R multiple, notes). Trades can be logged while still open and closed out later; shows a recent-result card and win-streak over the last 4 closed trades.
+- **Analysis** — a per-symbol trend/RSI/setup narrative with a live chart and timeframe switcher (15m–1W), for any symbol listed on OKX.
+- **Trades** — a manual trade journal (entry/exit, side, leverage, stop/target). Trades can be logged while still open and closed out later; the result (win/loss and R multiple, when a stop loss is set) is calculated automatically from entry/exit rather than entered by hand.
 
 ## Scripts
 

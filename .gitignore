@@ -43,3 +43,7 @@ vite.config.js.timestamp-*
 
 # Personal trade journal
 journal.csv
+
+# Tauri build output
+/src-tauri/target/
+/src-tauri/gen/
