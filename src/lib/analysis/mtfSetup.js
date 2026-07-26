@@ -121,17 +121,23 @@ export function buildMtfTrade(weeklyCandles, dailyCandles, fourHCandles, rMultip
   return buildTrade(findMtfSignal(weeklyCandles, dailyCandles, fourHCandles), rMultiple);
 }
 
-// Joins one useSetupFinder row (which carries `fourHTrigger`, direction-
-// agnostic) against its matching useMarketBias entry (`{ weeklyBias,
-// dailyTrend }` or undefined if the bias hook hasn't resolved that symbol
-// yet) into the shape scanColumns.jsx renders. Shared by ScanPanel and
-// WatchlistPanel so both tables apply the exact same 3-tier-agreement rule
-// rather than each re-deriving it.
+// Joins one useSetupFinder row (which carries `fourHTrigger` and
+// `shortable`, both direction-agnostic/symbol-level facts) against its
+// matching useMarketBias entry (`{ weeklyBias, dailyTrend }` or undefined if
+// the bias hook hasn't resolved that symbol yet) into the shape
+// scanColumns.jsx renders. Shared by ScanPanel, MarketPanel, and
+// WatchlistPanel so all three tables apply the exact same 3-tier-agreement
+// rule rather than each re-deriving it. A bearish (short) signal is vetoed
+// when the symbol isn't shortable on OKX (spot has no short mechanism at
+// all — see okx.js's isShortable) since that's not a trade the user can
+// actually place, no matter how well the setup otherwise lines up.
 export function attachEntry(row, bias) {
   const weekly = bias?.weeklyBias ?? null;
   const daily = bias?.dailyTrend ?? null;
   const aligned = weekly != null && weekly === daily;
   const trigger = row.fourHTrigger;
-  const mtfTrade = aligned && trigger && trigger.direction === weekly ? buildTrade(trigger, MTF_R_MULTIPLE) : null;
+  const triggered = aligned && trigger && trigger.direction === weekly;
+  const shortBlocked = triggered && weekly === "bearish" && !row.shortable;
+  const mtfTrade = triggered && !shortBlocked ? buildTrade(trigger, MTF_R_MULTIPLE) : null;
   return { ...row, weeklyBias: weekly, dailyTrend: daily, mtfTrade };
 }

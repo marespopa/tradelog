@@ -34,7 +34,9 @@ export function buildTradeColumns(onRemove, onClose) {
   return [
     {
       key: "exitTime",
-      title: "Closed",
+      title: "Status",
+      filter: "select",
+      filterValue: (r) => r.status,
       // Open trades have no exitTime yet — sort them as most-recent.
       sortValue: (r) => (r.exitTime ? new Date(r.exitTime).getTime() : Infinity),
       formatter: (r) =>
@@ -44,19 +46,19 @@ export function buildTradeColumns(onRemove, onClose) {
           fmtDateTime(r.exitTime)
         ),
     },
+    { key: "symbol", title: "Asset", filter: "text", formatter: (r) => <span className="font-medium">{r.symbol}</span> },
     {
-      key: "symbol",
-      title: "Asset",
-      filter: "text",
+      key: "side",
+      title: "Side",
+      filter: "select",
+      filterValue: (r) => r.side,
       formatter: (r) => (
-        <span className="flex flex-col leading-tight">
-          <span className="font-medium">{r.symbol}</span>
-          <span className={`text-[10px] font-semibold uppercase tracking-wide ${r.side === "short" ? "text-position-short" : "text-position-long"}`}>
-            {r.side}
-          </span>
+        <span className={`text-[11px] font-semibold uppercase tracking-wide ${r.side === "short" ? "text-position-short" : "text-position-long"}`}>
+          {r.side}
         </span>
       ),
     },
+    { key: "leverage", title: "Lev", align: "right", sortValue: (r) => r.leverage ?? 1, formatter: (r) => `${r.leverage ?? 1}x` },
     { key: "entryPrice", title: "Entry", align: "right", sortValue: (r) => r.entryPrice ?? 0, formatter: (r) => fmtPrice(r.entryPrice) },
     { key: "exitPrice", title: "Exit", align: "right", sortValue: (r) => r.exitPrice ?? 0, formatter: (r) => fmtPrice(r.exitPrice) },
     {
@@ -83,7 +85,8 @@ export function buildTradeColumns(onRemove, onClose) {
     {
       key: "outcome",
       title: "Outcome",
-      filter: "text",
+      filter: "select",
+      filterValue: (r) => (r.status === "open" ? "—" : r.outcome || "—"),
       formatter: (r) => (r.status === "open" ? "—" : r.outcome || "—"),
     },
     { key: "resultR", title: "Result", align: "right", sortValue: (r) => r.resultR ?? 0, formatter: (r) => <ResultBadge resultR={r.resultR} /> },

@@ -183,3 +183,42 @@ export async function fetchTopVolumeTickers(limit = 20) {
     .sort((a, b) => b.volUsd24h - a.volUsd24h)
     .slice(0, limit);
 }
+
+// Which symbols actually have a USDT-margined perpetual swap on OKX — a
+// spot listing existing (fetchTopVolumeTickers) doesn't mean the matching
+// `<symbol>-USDT-SWAP` instrument exists, and shorting on OKX only happens
+// via /trade-futures (perpetual swap or expiry futures), never spot. A
+// hedged-basket short leg picking a spot-only symbol would be a position
+// the user literally cannot execute. Static-ish list (new listings aside),
+// so callers can cache this more aggressively than the market-data
+// endpoints above.
+export async function fetchPerpetualSwapSymbols() {
+  const url = "https://www.okx.com/api/v5/public/instruments?instType=SWAP";
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
+  const json = await res.json();
+  if (json.code !== "0") throw new Error(json.msg || "OKX returned an error");
+  return new Set(
+    json.data.filter((i) => i.instId.endsWith("-USDT-SWAP")).map((i) => i.instId.replace("-USDT-SWAP", ""))
+  );
+}
+
+// Manual override on top of fetchPerpetualSwapSymbols(): OKX's public API
+// lists some perpetuals as `state: "live"` that aren't actually reachable
+// the normal way through /trade-futures (no reliable field distinguishes
+// these from ordinary perps — "openType" looked promising but turns out to
+// be shared by ~90% of all perps, including well-known ones, so it's not a
+// real signal). Confirmed manually so far: RE. Add a symbol here if you hit
+// the same thing — the automatic check can't catch what the API doesn't
+// expose.
+const MANUALLY_UNSHORTABLE = new Set(["RE"]);
+
+// Whether a symbol can actually be shorted on OKX right now — a perpetual
+// swap listing exists and it isn't one of the manually-confirmed exceptions
+// above. Any "short"/"bearish" signal surfaced to the user (Scan's entry
+// column, the former hedged basket) needs to gate on this: a spot-only
+// symbol ranking as a great short candidate is still a trade the user
+// cannot place.
+export function isShortable(symbol, perpSymbols) {
+  return perpSymbols.has(symbol) && !MANUALLY_UNSHORTABLE.has(symbol);
+}

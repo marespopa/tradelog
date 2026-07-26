@@ -24,7 +24,7 @@ function PctBadge({ value }) {
 
 // Bias/trend label badge shared by the Weekly and Daily columns — same
 // bullish/bearish/neutral coloring convention as the existing Trend column.
-// Exported for reuse by HedgedPortfolioPanel's regime column.
+// Exported for reuse by longTermColumns.jsx's Weekly/Daily columns.
 export function BiasBadge({ value }) {
   if (value == null) return <span className="text-dim">—</span>;
   return <span className={value === "bullish" ? "text-position-long" : value === "bearish" ? "text-position-short" : "text-dim"}>{value}</span>;

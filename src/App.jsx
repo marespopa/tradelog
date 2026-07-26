@@ -4,20 +4,21 @@ import { useWatchlist } from "./hooks/useWatchlist.js";
 import { useTrades } from "./hooks/useTrades.js";
 import CoinAnalysis from "./components/CoinAnalysis.jsx";
 import ScanPanel from "./components/ScanPanel.jsx";
+import MarketPanel from "./components/MarketPanel.jsx";
 import WatchlistPanel from "./components/WatchlistPanel.jsx";
 import TradesPanel from "./components/TradesPanel.jsx";
-import HedgedPortfolioPanel from "./components/HedgedPortfolioPanel.jsx";
+import LongTermPanel from "./components/LongTermPanel.jsx";
 
 // Scan the top-volume market for position-trading candidates, then act on
 // what you find. Analysis (chart/stats/sizing) isn't a nav tab — it's a
-// drill-down reached by clicking a row from the scan, watchlist, or hedged
-// basket.
-const TABS = new Set(["scan", "watchlist", "trades", "hedged", "analysis"]);
+// drill-down reached by clicking a row from any of the scan-like tabs.
+const TABS = new Set(["scan", "market", "watchlist", "trades", "longterm", "analysis"]);
 const NAV_TABS = [
   { key: "scan", label: "Scan" },
+  { key: "market", label: "Market" },
   { key: "watchlist", label: "Watchlist" },
   { key: "trades", label: "Trades" },
-  { key: "hedged", label: "Hedged" },
+  { key: "longterm", label: "Long-term" },
 ];
 
 function readUrlState() {
@@ -105,18 +106,22 @@ export default function App() {
       <main key={tab} className="animate-fade-in mx-auto flex max-w-[1400px] flex-col gap-5 px-7 py-6">
         {tab === "scan" && <ScanPanel onSelectSymbol={(symbol) => selectCoin(symbol, "scan")} watchlist={watchlist} />}
 
+        {tab === "market" && <MarketPanel onSelectSymbol={(symbol) => selectCoin(symbol, "market")} watchlist={watchlist} />}
+
         {tab === "watchlist" && (
           <WatchlistPanel watchlist={watchlist} onSelectSymbol={(symbol) => selectCoin(symbol, "watchlist")} />
         )}
 
         {tab === "trades" && <TradesPanel trades={trades} />}
 
-        {tab === "hedged" && <HedgedPortfolioPanel onSelectSymbol={(symbol) => selectCoin(symbol, "hedged")} />}
+        {tab === "longterm" && (
+          <LongTermPanel onSelectSymbol={(symbol) => selectCoin(symbol, "longterm")} watchlist={watchlist} />
+        )}
 
         {tab === "analysis" && (
           <>
             <button type="button" onClick={goBack} className="self-start text-[13px] text-dim hover:text-ink">
-              ← Back to {returnTab === "watchlist" ? "watchlist" : returnTab === "hedged" ? "hedged portfolio" : "scan"}
+              ← Back to {NAV_TABS.find((t) => t.key === returnTab)?.label.toLowerCase() ?? "scan"}
             </button>
             <CoinAnalysis symbol={coin} onSymbolChange={(symbol) => navigate({ coin: symbol })} watchlist={watchlist} />
           </>

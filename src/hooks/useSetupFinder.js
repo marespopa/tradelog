@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchCandles, fetchTopVolumeTickers, scanInBatches } from "../lib/analysis/okx.js";
+import { fetchCandles, fetchTopVolumeTickers, fetchPerpetualSwapSymbols, isShortable, scanInBatches } from "../lib/analysis/okx.js";
 import { analyzeCandles } from "../lib/analysis/ta.js";
 import { find4hTrigger } from "../lib/analysis/mtfSetup.js";
 
@@ -15,11 +15,18 @@ import { find4hTrigger } from "../lib/analysis/mtfSetup.js";
 // no Weekly/Daily data — that lives in useMarketBias, refreshed on its own
 // slower cadence). Whether that trigger amounts to a live 3-tier entry is
 // decided by the caller, which joins this against useMarketBias by symbol.
+//
+// Also reports shortable: OKX spot has no short mechanism at all — shorting
+// only happens via a symbol's perpetual swap (see okx.js's isShortable).
+// attachEntry() uses this to veto a "short" entry on a spot-only symbol
+// (SATS, for example, ranks fine on trend/trigger but has no -USDT-SWAP
+// listing, so a live short signal on it would be a trade the user can't
+// actually place).
 export function useSetupFinder(limit = 100, enabled = true) {
   return useQuery({
     queryKey: ["setup-finder", limit],
     queryFn: async () => {
-      const tickers = await fetchTopVolumeTickers(limit);
+      const [tickers, perpSymbols] = await Promise.all([fetchTopVolumeTickers(limit), fetchPerpetualSwapSymbols()]);
       const results = await scanInBatches(tickers, async (ticker) => {
         const candles = await fetchCandles(ticker.symbol, "4h", 220);
         const fourHTrigger = find4hTrigger(candles, "bullish") ?? find4hTrigger(candles, "bearish");
@@ -27,6 +34,7 @@ export function useSetupFinder(limit = 100, enabled = true) {
           ...analyzeCandles(candles, ticker.symbol),
           changePct24h: ticker.changePct24h,
           fourHTrigger,
+          shortable: isShortable(ticker.symbol, perpSymbols),
         };
       });
       return results.filter((r) => r.status === "fulfilled").map((r) => r.value);

@@ -514,7 +514,7 @@ function buildEvaluation({ symbol, trendLabel, current, neckline, floor, holding
 // there isn't one — silently returning null when e.g. price has already run
 // past the structural target reads as "broken" in the UI rather than as the
 // deliberate "don't chase an extended move" call that it actually is.
-function buildSetup({ direction, current, atr, swingLow, neckline, swingHigh, floor }) {
+export function buildSetup({ direction, current, atr, swingLow, neckline, swingHigh, floor }) {
   if (atr == null) return { skipped: true, reason: "not-enough-history" };
   const stopDistance = atr * 1.5;
 

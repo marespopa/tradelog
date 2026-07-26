@@ -3,8 +3,18 @@ import { createPortal } from "react-dom";
 import DataTable from "./DataTable.jsx";
 import { buildTradeColumns } from "../lib/tradeColumns.jsx";
 import { useLivePrices } from "../hooks/useLivePrices.js";
+import { useEntryRiskCheck } from "../hooks/useEntryRiskCheck.js";
 import { fmtDurationExact, fmtPrice, fmtRiskReward } from "../lib/format.js";
 import { parseOkxOrder } from "../lib/okxOrder.js";
+
+// "YYYY-MM-DDTHH:mm" in the viewer's *local* time, for pre-filling a
+// datetime-local input's value with "now" — datetime-local expects local
+// wall-clock time, not UTC, so Date#toISOString() alone would show the
+// wrong hour off by the timezone offset.
+function nowForDatetimeLocal() {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
 
 function leveragedPct(trade) {
   const { entryPrice, exitPrice, side, leverage } = trade;
@@ -96,6 +106,93 @@ function RecentTradeCard({ trade }) {
   );
 }
 
+// beta<=1.2 ~ BTC-like, up to 1.2x-2x ~ moderate alts, beyond that ~
+// meme/high-beta names — matches the "2x-3x for meme/alt trades" guidance:
+// needing more leverage than the cap to hit a target usually means the
+// entry size or stop placement is off, not that leverage should go up.
+function suggestedMaxLeverage(beta) {
+  if (beta == null) return null;
+  if (beta <= 1.2) return 10;
+  if (beta <= 2) return 5;
+  return 3;
+}
+
+const SETUP_SKIP_REASON = {
+  "not-enough-history": "Not enough 4H history yet for a structural target — try again in a moment, or size purely off ATR.",
+  "degenerate-structure": "ATR-based stop would land on the wrong side of price for this direction — double check the symbol/side.",
+  "already-extended": "Price has already run past the structural target for this direction — no target suggested; this isn't a fresh entry.",
+};
+
+// Live suggested stop/target (from useEntryRiskCheck, reusing ta.js's
+// buildSetup — the same 1.5x-ATR-stop / structural-target formula the Scan
+// panel already trusts) plus warnings when what's actually typed fights the
+// symbol's own volatility: a stop tighter than its ATR-based noise band, or
+// leverage high for how high-beta it is vs BTC.
+function EntryRiskHelper({ form, riskCheck, onUseSuggested }) {
+  const trimmedSymbol = form.symbol.trim();
+  if (!trimmedSymbol) return null;
+  if (!riskCheck) return <p className="text-[11px] text-dim">Checking {trimmedSymbol.toUpperCase()}'s ATR/structure…</p>;
+
+  const setup = form.side === "short" ? riskCheck.setupShort : riskCheck.setupLong;
+  const entryPrice = form.entryPrice === "" ? null : parseFloat(form.entryPrice);
+  const stopLoss = form.stopLoss === "" ? null : parseFloat(form.stopLoss);
+  const leverage = form.leverage === "" ? null : parseFloat(form.leverage);
+
+  const stopDistancePct = entryPrice != null && stopLoss != null ? (Math.abs(entryPrice - stopLoss) / entryPrice) * 100 : null;
+  const suggestedMinStopPct = riskCheck.atrPct != null ? riskCheck.atrPct * 1.5 : null;
+  // 0.1% relative tolerance — stopDistancePct and suggestedMinStopPct are
+  // computed via two different arithmetic paths that are mathematically
+  // identical when the stop *is* the suggested one (e.g. right after "Use
+  // suggested"), but floating-point rounding can leave them a hair apart,
+  // enough for a strict "<" to fire on the suggestion's own value.
+  const stopTooTight = stopDistancePct != null && suggestedMinStopPct != null && stopDistancePct < suggestedMinStopPct * 0.999;
+
+  const leverageCap = suggestedMaxLeverage(riskCheck.beta);
+  const leverageTooHigh = leverage != null && leverageCap != null && leverage > leverageCap;
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-edge bg-panel-alt px-3 py-2 text-[11px]">
+      {setup && !setup.skipped ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-dim">
+            Suggested ({form.side}, 4H ATR + structure): stop {fmtPrice(setup.stop)} · target {fmtPrice(setup.target)} · R:R {setup.rr.toFixed(2)}
+          </span>
+          <button
+            type="button"
+            onClick={() => onUseSuggested(setup, riskCheck.current)}
+            className="rounded border-0 bg-accent/15 px-2 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/25"
+          >
+            Use suggested
+          </button>
+        </div>
+      ) : setup?.skipped ? (
+        <p className="text-dim">{SETUP_SKIP_REASON[setup.reason] ?? "No structural target suggested right now."}</p>
+      ) : null}
+
+      {riskCheck.trend && (
+        <p className="text-dim">
+          4H trend: {riskCheck.trend}
+          {riskCheck.beta != null && riskCheck.symbol !== "BTC" ? ` · beta vs BTC: ${riskCheck.beta.toFixed(2)}` : ""}
+        </p>
+      )}
+
+      {stopTooTight && (
+        <p className="text-position-short">
+          Stop is {stopDistancePct.toFixed(2)}% away — tighter than this symbol's ATR-based noise band (~{suggestedMinStopPct.toFixed(2)}% suggested
+          minimum). Widen the stop or size down instead of risking a noise stop-out.
+        </p>
+      )}
+
+      {leverageTooHigh && (
+        <p className="text-position-short">
+          {leverage}x is high for this asset's beta ({riskCheck.beta.toFixed(2)} vs BTC) — suggested cap ~{leverageCap}x. Needing more leverage than
+          that usually means the entry size or stop placement is off, not that leverage should go up.
+        </p>
+      )}
+    </div>
+  );
+}
+
 const emptyForm = {
   symbol: "",
   side: "long",
@@ -114,8 +211,18 @@ function AddTradeForm({ onAdd }) {
   const [form, setForm] = useState(emptyForm);
   const [pasteText, setPasteText] = useState("");
   const [pasteNotice, setPasteNotice] = useState("");
+  const riskCheck = useEntryRiskCheck(form.symbol);
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+
+  const useSuggestedSetup = (setup, currentPrice) => {
+    setForm((f) => ({
+      ...f,
+      entryPrice: f.entryPrice === "" ? String(currentPrice) : f.entryPrice,
+      stopLoss: String(setup.stop),
+      targetPrice: String(setup.target),
+    }));
+  };
 
   const fillFromPaste = () => {
     const parsed = parseOkxOrder(pasteText);
@@ -144,7 +251,9 @@ function AddTradeForm({ onAdd }) {
       entryPrice: form.entryPrice === "" ? null : parseFloat(form.entryPrice),
       exitPrice: form.exitPrice === "" ? null : parseFloat(form.exitPrice),
       leverage: form.leverage === "" ? 1 : parseFloat(form.leverage),
-      entryTime: form.entryTime ? new Date(form.entryTime).toISOString() : null,
+      entryTime: form.entryTime
+        ? new Date(form.entryTime).toISOString()
+        : new Date().toISOString(),
       exitTime: form.exitTime
         ? new Date(form.exitTime).toISOString()
         : new Date().toISOString(),
@@ -161,7 +270,12 @@ function AddTradeForm({ onAdd }) {
   const trigger = (
     <button
       type="button"
-      onClick={() => setOpen(true)}
+      onClick={() => {
+        // Same "now" default as CloseTradeDialog — visible/editable instead
+        // of a blank field that silently falls back to Date.now() on submit.
+        setForm((f) => ({ ...f, entryTime: nowForDatetimeLocal(), exitTime: nowForDatetimeLocal() }));
+        setOpen(true);
+      }}
       className="self-start rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:opacity-90"
     >
       + Add trade
@@ -314,6 +428,8 @@ function AddTradeForm({ onAdd }) {
               </div>
             </div>
 
+            <EntryRiskHelper form={form} riskCheck={riskCheck} onUseSuggested={useSuggestedSetup} />
+
             <label className="flex w-fit items-center gap-2 text-[13px] text-ink">
               <input
                 type="checkbox"
@@ -377,13 +493,11 @@ function AddTradeForm({ onAdd }) {
   );
 }
 
-const emptyCloseForm = {
-  exitPrice: "",
-  exitTime: "",
-};
-
 function CloseTradeDialog({ trade, onClose, onCancel }) {
-  const [form, setForm] = useState(emptyCloseForm);
+  // Defaults to "now" — closing a trade almost always means "just now,"
+  // and this makes that default visible/editable instead of a blank field
+  // that silently falls back to Date.now() on submit if left untouched.
+  const [form, setForm] = useState(() => ({ exitPrice: "", exitTime: nowForDatetimeLocal() }));
   const [pasteText, setPasteText] = useState("");
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
