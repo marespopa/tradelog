@@ -1,4 +1,4 @@
-import { fmt } from "../format.jsx";
+import { fmt } from "../format.js";
 
 export function ema(values, period) {
   const k = 2 / (period + 1);

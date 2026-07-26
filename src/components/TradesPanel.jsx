@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import DataTable from "./DataTable.jsx";
 import { buildTradeColumns } from "../lib/tradeColumns.jsx";
 import { useLivePrices } from "../hooks/useLivePrices.js";
-import { fmtDurationExact, fmtPrice, fmtRiskReward } from "../lib/format.jsx";
+import { fmtDurationExact, fmtPrice, fmtRiskReward } from "../lib/format.js";
 import { parseOkxOrder } from "../lib/okxOrder.js";
 
 function leveragedPct(trade) {

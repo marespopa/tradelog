@@ -1,4 +1,4 @@
-import { fmtDateTime, fmtPrice, fmtRiskReward, riskRewardRatio } from "./format.jsx";
+import { fmtDateTime, fmtPrice, fmtRiskReward, riskRewardRatio } from "./format.js";
 
 function ResultBadge({ resultR }) {
   if (resultR == null) return "—";

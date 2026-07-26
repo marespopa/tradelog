@@ -11,30 +11,14 @@
 // the backtest scripts run the identical rule instead of drifting apart.
 import { ema, atr, findSwingLevels } from "./ta.js";
 import { isPinBar, isEngulfing, isInsideBarBreakout } from "./patterns.js";
+import { buildDailyCandles } from "./timeframes.js";
 
 export const FXNX_R_MULTIPLE = 2;
 export const FXNX_WARMUP_BARS = 320; // ~50 complete daily candles (300 4H bars) for D1 EMA50, plus buffer
-const DAY_MS = 86400000;
 
-// Groups 4H candles into daily OHLC, dropping a trailing incomplete day (< 6
-// bars) so the "current" daily candle is never treated as closed early.
-export function buildDailyCandles(candles) {
-  const byDay = new Map();
-  for (const c of candles) {
-    const dayKey = Math.floor(c.time / DAY_MS);
-    if (!byDay.has(dayKey)) byDay.set(dayKey, []);
-    byDay.get(dayKey).push(c);
-  }
-  const days = [...byDay.entries()].sort((a, b) => a[0] - b[0]);
-  if (days.length && days.at(-1)[1].length < 6) days.pop();
-  return days.map(([, bars]) => ({
-    time: bars[0].time,
-    open: bars[0].open,
-    high: Math.max(...bars.map((b) => b.high)),
-    low: Math.min(...bars.map((b) => b.low)),
-    close: bars.at(-1).close,
-  }));
-}
+// Re-exported for compatibility — daily bucketing now lives in timeframes.js
+// (shared with the weekly resampling mtfSetup.js needs), not defined here.
+export { buildDailyCandles };
 
 // Finds the trigger + stop for the FXNX rule set at the tail of `candles`
 // (candles up to and including the last one only — no lookahead). Returns

@@ -1,5 +1,5 @@
 import WatchButton from "../components/WatchButton.jsx";
-import { fmt } from "./format.jsx";
+import { fmt } from "./format.js";
 
 function vs200Ema(row) {
   const ema200 = row.factors?.trend?.ema200;
@@ -17,6 +17,27 @@ function PctBadge({ value }) {
   );
 }
 
+// Bias/trend label badge shared by the Weekly and Daily columns — same
+// bullish/bearish/neutral coloring convention as the existing Trend column.
+function BiasBadge({ value }) {
+  if (value == null) return <span className="text-dim">—</span>;
+  return <span className={value === "bullish" ? "text-position-long" : value === "bearish" ? "text-position-short" : "text-dim"}>{value}</span>;
+}
+
+// The live 3-tier entry: only set when Weekly bias, Daily trend, and the 4H
+// trigger all agree (see ScanPanel's merge of useSetupFinder + useMarketBias).
+// Distinct from the raw per-timeframe badges above — this is the actual
+// "good entry" highlight, not just another stat.
+function EntryBadge({ trade }) {
+  if (!trade) return <span className="text-dim">—</span>;
+  const dirClass = trade.direction === "long" ? "text-position-long" : "text-position-short";
+  return (
+    <span className={`font-medium ${dirClass}`}>
+      {trade.direction} · {trade.trigger}
+    </span>
+  );
+}
+
 // Mean-reversion framing (matches the meanReversion factor in ta.js): a
 // stretched-negative z-score means price has fallen well below its rolling
 // mean — a reversion-upward ("buy zone") read, not a trend one. Stretched
@@ -29,15 +50,47 @@ function ZScoreBadge({ value }) {
   return <span className={className}>{value.toFixed(2)}</span>;
 }
 
-// Shared by the scan table and the watchlist table (both show the same 4H
-// swing-scan shape) so the two views can't drift out of sync. `watchlist`
-// is the useWatchlist() instance so a star column can be prepended.
+// Shared by the scan table and the watchlist table (both show the same
+// Weekly->Daily->4H swing-scan shape) so the two views can't drift out of
+// sync. `watchlist` is the useWatchlist() instance so a star column can be
+// prepended. Rows are expected to carry weeklyBias/dailyTrend/mtfTrade
+// (attached by ScanPanel's merge of useSetupFinder + useMarketBias) in
+// addition to the raw per-4H-candle stats from analyzeCandles().
 export function buildScanColumns(watchlist) {
   const columns = [
     { key: "symbol", title: "Symbol", filter: "text" },
     {
+      key: "entry",
+      title: "Entry",
+      sortValue: (r) => (r.mtfTrade ? 1 : 0),
+      formatter: (r) => <EntryBadge trade={r.mtfTrade} />,
+    },
+    {
+      key: "weeklyBias",
+      title: "Weekly",
+      filter: "select",
+      filterValue: (r) => r.weeklyBias ?? "—",
+      sortValue: (r) => r.weeklyBias ?? "",
+      formatter: (r) => <BiasBadge value={r.weeklyBias} />,
+    },
+    {
+      key: "dailyTrend",
+      title: "Daily",
+      filter: "select",
+      filterValue: (r) => r.dailyTrend ?? "—",
+      sortValue: (r) => r.dailyTrend ?? "",
+      formatter: (r) => <BiasBadge value={r.dailyTrend} />,
+    },
+    {
+      key: "rr",
+      title: "R:R",
+      align: "right",
+      sortValue: (r) => r.mtfTrade?.rr ?? 0,
+      formatter: (r) => (r.mtfTrade ? `1:${r.mtfTrade.rr}` : "—"),
+    },
+    {
       key: "trend",
-      title: "Trend",
+      title: "4H Trend",
       filter: "select",
       filterValue: (r) => r.trend,
       formatter: (r) => (

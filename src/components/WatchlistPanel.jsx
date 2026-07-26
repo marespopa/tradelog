@@ -2,21 +2,26 @@ import { useMemo } from "react";
 import DataTable from "./DataTable.jsx";
 import WatchButton from "./WatchButton.jsx";
 import { useSetupFinder } from "../hooks/useSetupFinder.js";
+import { useMarketBias } from "../hooks/useMarketBias.js";
 import { useLivePrices } from "../hooks/useLivePrices.js";
+import { attachEntry } from "../lib/analysis/mtfSetup.js";
 import { buildScanColumns } from "../lib/scanColumns.jsx";
-import { fmtPrice } from "../lib/format.jsx";
+import { fmtPrice } from "../lib/format.js";
 
 // Shares the setup-finder query (same queryKey/limit) with ScanPanel, so
 // opening the watchlist doesn't trigger a second scan — it just re-filters
-// whatever the scan already fetched.
+// whatever the scan already fetched. Also shares the market-bias query the
+// same way, and applies the identical attachEntry() join so a watched
+// symbol's Entry/Weekly/Daily columns match what the scan table would show.
 export default function WatchlistPanel({ watchlist, onSelectSymbol }) {
   const { data, isLoading, isFetching, error } = useSetupFinder(100);
+  const { data: bias } = useMarketBias(100);
 
   const scanBySymbol = useMemo(() => {
     const map = new Map();
-    for (const row of data ?? []) map.set(row.symbol, row);
+    for (const row of data ?? []) map.set(row.symbol, attachEntry(row, bias?.get(row.symbol)));
     return map;
-  }, [data]);
+  }, [data, bias]);
 
   const rows = useMemo(
     () => watchlist.symbols.map((symbol) => scanBySymbol.get(symbol)).filter(Boolean),
@@ -58,7 +63,7 @@ export default function WatchlistPanel({ watchlist, onSelectSymbol }) {
             emptyText={isLoading ? "Loading watched pairs…" : "None of your watched pairs are in the current scan"}
             onRowClick={(row) => onSelectSymbol?.(row.symbol)}
             pageSize={20}
-            initialSort={{ key: "trendPct", dir: -1 }}
+            initialSort={{ key: "entry", dir: -1 }}
             exportFilename={`watchlist-${new Date().toISOString().slice(0, 10)}.csv`}
           />
 
