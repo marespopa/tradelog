@@ -83,6 +83,52 @@ export async function fetchCandleHistory(symbol, timeframe, totalBars) {
     .sort((a, b) => a.time - b.time);
 }
 
+// Perpetual swap funding-rate history — the premium longs pay shorts (or
+// shorts pay longs, when negative) every funding interval (8h for most
+// USDT-margined perps on OKX). Paginated the same way fetchCandleHistory
+// pages /market/history-candles: `after` cursor set to the oldest
+// fundingTime seen so far, walking backward until totalPeriods worth of
+// history is collected or the venue runs out (a newer/thinner-history
+// listing). `realizedRate` (not `fundingRate`) is used — for settled
+// periods they're equal, but realizedRate is the one guaranteed to reflect
+// what actually happened rather than a still-open period's live estimate.
+export async function fetchFundingRateHistory(symbol, totalPeriods) {
+  const instId = `${symbol.toUpperCase()}-USDT-SWAP`;
+  const all = [];
+  let after;
+  while (all.length < totalPeriods) {
+    const url = new URL("https://www.okx.com/api/v5/public/funding-rate-history");
+    url.searchParams.set("instId", instId);
+    url.searchParams.set("limit", "100");
+    if (after) url.searchParams.set("after", after);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
+    const json = await res.json();
+    if (json.code !== "0") throw new Error(json.msg || "OKX returned an error");
+    if (!json.data?.length) break;
+    all.push(...json.data);
+    after = json.data.at(-1).fundingTime;
+    if (json.data.length < 100) break;
+  }
+  return all
+    .map((d) => ({ time: Number(d.fundingTime), rate: Number(d.realizedRate) }))
+    .sort((a, b) => a.time - b.time);
+}
+
+// Current period's funding rate for a perp (settles at nextFundingTime) —
+// used by the live hook to show what's about to be collected/paid, since
+// fetchFundingRateHistory only has *settled* periods.
+export async function fetchFundingRate(symbol) {
+  const instId = `${symbol.toUpperCase()}-USDT-SWAP`;
+  const url = `https://www.okx.com/api/v5/public/funding-rate?instId=${instId}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
+  const json = await res.json();
+  if (json.code !== "0" || !json.data?.length) throw new Error(json.msg || `No funding rate for ${instId}`);
+  const d = json.data[0];
+  return { rate: Number(d.fundingRate), nextTime: Number(d.nextFundingTime) };
+}
+
 // Latest traded price for one symbol — used for Portfolio USD valuation.
 export async function fetchTickerPrice(symbol) {
   const url = `https://www.okx.com/api/v5/market/ticker?instId=${symbol.toUpperCase()}-USDT`;

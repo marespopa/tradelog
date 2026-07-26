@@ -7,7 +7,7 @@
     <script>
       (function () {
         const saved = localStorage.getItem("alpha-scout-theme");
-        const theme = saved || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+        const theme = saved === "light" || saved === "dark" ? saved : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
         if (theme === "dark") document.documentElement.classList.add("dark");
       })();
     </script>

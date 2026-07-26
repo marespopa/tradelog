@@ -3,6 +3,7 @@ import PriceChart from "./PriceChart.jsx";
 import WatchButton from "./WatchButton.jsx";
 import { useCoinAnalysis } from "../hooks/useCoinAnalysis.js";
 import { TIMEFRAMES } from "../lib/analysis/okx.js";
+import { linearRegressionChannel } from "../lib/analysis/ta.js";
 
 const TIMEFRAME_LABEL = { "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "1w": "1W" };
 
@@ -17,6 +18,7 @@ export default function CoinAnalysis({ symbol: controlledSymbol, onSymbolChange,
   const [symbol, setSymbol] = useState(controlledSymbol || "BTC");
   const [symbolInput, setSymbolInput] = useState(symbol);
   const [timeframe, setTimeframe] = useState("1h");
+  const [showChannel, setShowChannel] = useState(true);
 
   // Setup Finder (or a future deep link) can hand us a symbol directly —
   // sync it in without fighting the user's own in-progress typing.
@@ -42,6 +44,12 @@ export default function CoinAnalysis({ symbol: controlledSymbol, onSymbolChange,
       volumes: candles.map((c) => c.volume),
     };
   }, [data]);
+
+  // Spans the whole loaded window (no fixed lookback) so it reads
+  // consistently whichever timeframe is selected, rather than a fixed bar
+  // count that would cover very different amounts of real time across
+  // 15m vs 1D candles.
+  const channel = useMemo(() => (data && showChannel ? linearRegressionChannel(data.candles) : null), [data, showChannel]);
 
   const submitSymbol = (e) => {
     e.preventDefault();
@@ -70,17 +78,27 @@ export default function CoinAnalysis({ symbol: controlledSymbol, onSymbolChange,
           {watchlist && <WatchButton active={watchlist.has(symbol)} onToggle={() => watchlist.toggle(symbol)} />}
         </form>
 
-        <div className="flex gap-1 rounded-lg bg-panel-alt p-1">
-          {TIMEFRAMES.map((tf) => (
-            <button
-              key={tf}
-              type="button"
-              onClick={() => setTimeframe(tf)}
-              className={`rounded-md px-3 py-1 text-[12px] font-medium transition-all duration-150 ${timeframe === tf ? "bg-panel-raised text-ink shadow-sm" : "text-dim hover:text-ink"}`}
-            >
-              {TIMEFRAME_LABEL[tf]}
-            </button>
-          ))}
+        <div className="flex items-center gap-3">
+          <div className="flex gap-1 rounded-lg bg-panel-alt p-1">
+            {TIMEFRAMES.map((tf) => (
+              <button
+                key={tf}
+                type="button"
+                onClick={() => setTimeframe(tf)}
+                className={`rounded-md px-3 py-1 text-[12px] font-medium transition-all duration-150 ${timeframe === tf ? "bg-panel-raised text-ink shadow-sm" : "text-dim hover:text-ink"}`}
+              >
+                {TIMEFRAME_LABEL[tf]}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowChannel((s) => !s)}
+            title="Linear regression channel over the loaded window"
+            className={`rounded-lg border-0 px-3 py-1.5 text-[12px] font-medium transition-all duration-150 ${showChannel ? "bg-accent text-white" : "bg-panel-alt text-dim hover:text-ink"}`}
+          >
+            Channel
+          </button>
         </div>
       </div>
 
@@ -90,7 +108,7 @@ export default function CoinAnalysis({ symbol: controlledSymbol, onSymbolChange,
 
         {analysis && (
           <>
-            {chartProps && <PriceChart {...chartProps} height={420} />}
+            {chartProps && <PriceChart {...chartProps} channel={channel} height={420} />}
 
             <div className="mt-3 flex justify-center">
               <span className={`rounded-full px-3 py-1 text-[12px] font-medium ${TREND_STYLE[analysis.trend]}`}>{TREND_LABEL[analysis.trend]}</span>

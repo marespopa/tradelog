@@ -14,6 +14,7 @@
 //   triggers on a fast cadence (useSetupFinder) as two separate hooks.
 import { ema, atr, findSwingLevels } from "./ta.js";
 import { isEngulfing } from "./patterns.js";
+import { buildWeeklyCandles } from "./timeframes.js";
 
 export const MTF_R_MULTIPLE = 2;
 // ~85 weeks of history so weekly EMA20 has settled (EMA needs roughly 3x its
@@ -43,6 +44,19 @@ export function weeklyBias(weeklyCandles) {
 // direction so the live hook can display it even when it disagrees.
 export function dailyTrend(dailyCandles) {
   return emaCross(dailyCandles.map((c) => c.close), DAILY_EMA_FAST, DAILY_EMA_SLOW);
+}
+
+// Weekly+Daily regime from a single daily candle series (resamples weekly
+// internally via timeframes.js) — the persistent trend-agreement read used
+// by slower-cadence consumers (betaNeutral.js's basket construction, which
+// rebalances weekly) that don't need the 4H entry-timing tier at all.
+// Returns "bullish"/"bearish" only when both tiers agree, null otherwise
+// (including not-enough-history, which is common until ~85 weeks of daily
+// candles have accumulated — see MTF_WEEKLY_WARMUP_BARS).
+export function mtfRegime(dailyCandles) {
+  const wBias = weeklyBias(buildWeeklyCandles(dailyCandles));
+  if (!wBias) return null;
+  return dailyTrend(dailyCandles) === wBias ? wBias : null;
 }
 
 // Entry-timing trigger at the 4H level, gated to a single required

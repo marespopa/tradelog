@@ -6,15 +6,18 @@ import CoinAnalysis from "./components/CoinAnalysis.jsx";
 import ScanPanel from "./components/ScanPanel.jsx";
 import WatchlistPanel from "./components/WatchlistPanel.jsx";
 import TradesPanel from "./components/TradesPanel.jsx";
+import HedgedPortfolioPanel from "./components/HedgedPortfolioPanel.jsx";
 
 // Scan the top-volume market for position-trading candidates, then act on
 // what you find. Analysis (chart/stats/sizing) isn't a nav tab — it's a
-// drill-down reached by clicking a row from the scan or the watchlist.
-const TABS = new Set(["scan", "watchlist", "trades", "analysis"]);
+// drill-down reached by clicking a row from the scan, watchlist, or hedged
+// basket.
+const TABS = new Set(["scan", "watchlist", "trades", "hedged", "analysis"]);
 const NAV_TABS = [
   { key: "scan", label: "Scan" },
   { key: "watchlist", label: "Watchlist" },
   { key: "trades", label: "Trades" },
+  { key: "hedged", label: "Hedged" },
 ];
 
 function readUrlState() {
@@ -24,7 +27,7 @@ function readUrlState() {
 }
 
 export default function App() {
-  const { theme, toggle } = useTheme();
+  const { preference, cycle } = useTheme();
   const watchlist = useWatchlist();
   const trades = useTrades();
   const [{ tab, coin }, setUrlState] = useState(readUrlState);
@@ -89,12 +92,12 @@ export default function App() {
         <div className="flex flex-1 items-center justify-end">
           <button
             type="button"
-            onClick={toggle}
-            aria-label="Toggle dark/light mode"
-            title="Toggle dark/light mode"
+            onClick={cycle}
+            aria-label={`Theme: ${preference} (click to switch)`}
+            title={`Theme: ${preference} — click to switch`}
             className="flex h-8 w-8 items-center justify-center rounded-full bg-panel-alt text-[14px] transition-all duration-200 hover:rotate-12 hover:bg-panel-raised active:scale-90"
           >
-            {theme === "light" ? "🌙" : "☀️"}
+            {preference === "system" ? "🖥️" : preference === "dark" ? "🌙" : "☀️"}
           </button>
         </div>
       </header>
@@ -108,10 +111,12 @@ export default function App() {
 
         {tab === "trades" && <TradesPanel trades={trades} />}
 
+        {tab === "hedged" && <HedgedPortfolioPanel onSelectSymbol={(symbol) => selectCoin(symbol, "hedged")} />}
+
         {tab === "analysis" && (
           <>
             <button type="button" onClick={goBack} className="self-start text-[13px] text-dim hover:text-ink">
-              ← Back to {returnTab === "watchlist" ? "watchlist" : "scan"}
+              ← Back to {returnTab === "watchlist" ? "watchlist" : returnTab === "hedged" ? "hedged portfolio" : "scan"}
             </button>
             <CoinAnalysis symbol={coin} onSymbolChange={(symbol) => navigate({ coin: symbol })} watchlist={watchlist} />
           </>

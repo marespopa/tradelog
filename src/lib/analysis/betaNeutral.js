@@ -1,12 +1,14 @@
 // Beta-neutral long/short basket: rank coins by their return in excess of
 // what BTC's move alone would explain (a simple one-factor market-model
-// "alpha"), long the strongest, short the weakest, and size each leg
-// inversely to beta so the aggregate long-side beta and short-side beta
-// roughly cancel — the basket's P&L is meant to come from convergence in
-// relative strength, not from BTC/the broader market going up or down.
-// This is a construction method, not a proven edge — see
-// scripts/backtest-beta-neutral.js for the walk-forward validation before
-// trusting it with real sizing.
+// "alpha"), long the strongest, short the weakest, optionally veto a leg
+// candidate whose Weekly+Daily trend regime actively disagrees (see
+// buildBetaNeutralBasket's regimeBySymbol param), then size the short leg's
+// total notional (not just its per-name weights) so the aggregate long-side
+// beta and short-side beta cancel exactly, by construction — the basket's
+// P&L is meant to come from convergence in relative strength, not from
+// BTC/the broader market going up or down. This is a construction method,
+// not a proven edge — see scripts/backtest-beta-neutral.js for the
+// walk-forward validation before trusting it with real sizing.
 
 function logReturns(closes) {
   const out = [];
@@ -46,17 +48,33 @@ export function computeBetaAlpha(coinCloses, marketCloses) {
   return { beta, alpha };
 }
 
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
 // rows: [{ symbol, beta, alpha, price? }] for every candidate (market symbol
 // itself excluded by the caller). Longs are the highest-alpha names, shorts
 // the lowest; each leg is weighted 1/|beta| (clamped so a near-zero beta
 // doesn't blow up the weight), normalized to sum to 1 within the leg — so
 // naming this "beta-neutral" is a claim the resulting netBeta number backs
 // up or doesn't, not an assumption baked into the formula.
-export function buildBetaNeutralBasket(rows, { longCount = 5, shortCount = 5, minAbsBeta = 0.25 } = {}) {
+//
+// regimeBySymbol (optional): { [symbol]: "bullish"|"bearish"|null }, the
+// Weekly+Daily trend agreement from mtfSetup.js's mtfRegime(). A coin whose
+// regime actively disagrees with a leg's direction is excluded from that
+// leg's candidate pool entirely — alpha still decides ranking/selection
+// *within* the eligible pool, this only vetoes fighting an established
+// trend. Coins with no regime read (not enough history, or the two
+// timeframes disagree) stay eligible for both legs, same as if the
+// parameter were omitted.
+export function buildBetaNeutralBasket(rows, { longCount = 5, shortCount = 5, minAbsBeta = 0.25, regimeBySymbol } = {}) {
   const usable = rows.filter((r) => Number.isFinite(r.beta) && Number.isFinite(r.alpha));
-  const sorted = [...usable].sort((a, b) => b.alpha - a.alpha);
-  const longs = sorted.slice(0, longCount);
-  const shorts = sorted.slice(-shortCount).reverse();
+  const regimeOf = (symbol) => regimeBySymbol?.[symbol] ?? null;
+  const longEligible = usable.filter((r) => regimeOf(r.symbol) !== "bearish");
+  const shortEligible = usable.filter((r) => regimeOf(r.symbol) !== "bullish");
+
+  const longs = [...longEligible].sort((a, b) => b.alpha - a.alpha).slice(0, longCount);
+  const shorts = [...shortEligible].sort((a, b) => a.alpha - b.alpha).slice(0, shortCount);
 
   const weightLeg = (leg) => {
     const rawWeights = leg.map((r) => 1 / Math.max(minAbsBeta, Math.abs(r.beta)));
@@ -68,7 +86,26 @@ export function buildBetaNeutralBasket(rows, { longCount = 5, shortCount = 5, mi
   const weightedShorts = weightLeg(shorts);
 
   const longBeta = weightedLongs.reduce((s, r) => s + r.weight * r.beta, 0);
-  const shortBeta = weightedShorts.reduce((s, r) => s + r.weight * r.beta, 0);
+  const shortBetaAtParWeight = weightedShorts.reduce((s, r) => s + r.weight * r.beta, 0);
 
-  return { longs: weightedLongs, shorts: weightedShorts, netBeta: longBeta - shortBeta };
+  // Per-name inverse-beta weighting only balances exposure *within* each
+  // leg — it doesn't make the short leg's aggregate beta match the long
+  // leg's, so a $1-long/$1-short book still carries real net market
+  // exposure whenever low-alpha names (shorted) skew higher- or lower-beta
+  // than high-alpha names (longed), which is common in crypto alts. Scaling
+  // the short leg's total notional to longBeta/shortBetaAtParWeight (long
+  // leg held at 1x) solves for the short size that actually zeroes out net
+  // beta by construction. This means the book is no longer dollar-neutral
+  // (long and short notional can differ) — that's the correct trade-off for
+  // a basket whose stated goal is neutral market *exposure*, not neutral
+  // capital. Clamped to [0, 3]x: 0 when the short leg's beta is too close
+  // to zero to size off of (degenerate, so the hedge is skipped rather than
+  // producing a wild weight), 3x as a sanity ceiling against unrealistic
+  // leverage when shortBetaAtParWeight happens to be small.
+  const shortScale = Math.abs(shortBetaAtParWeight) > 1e-6 ? clamp(longBeta / shortBetaAtParWeight, 0, 3) : 0;
+  const scaledShorts = weightedShorts.map((r) => ({ ...r, weight: r.weight * shortScale }));
+  const shortBeta = scaledShorts.reduce((s, r) => s + r.weight * r.beta, 0);
+  const shortNotional = scaledShorts.reduce((s, r) => s + r.weight, 0);
+
+  return { longs: weightedLongs, shorts: scaledShorts, longNotional: 1, shortNotional, netBeta: longBeta - shortBeta };
 }

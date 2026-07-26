@@ -8,6 +8,7 @@
   --c-panel-alt: rgba(124, 111, 224, 0.06);
   --c-panel-raised: #ffffff;
   --c-border: rgba(44, 32, 86, 0.1);
+  --c-border-soft: rgba(44, 32, 86, 0.05);
   --c-text: #2c2a3a;
   --c-dim: #6f6c82;
   --c-long: #1f9d6b;
@@ -29,28 +30,36 @@
   --chart-8: #eb6834;
 }
 
+/* Bloomberg-terminal-style dark theme: true-black surfaces, amber as the
+   primary text/accent color, thin amber-tinted dividers instead of
+   surface-lightness doing the work of separating panels — Bloomberg itself
+   doesn't use elevated cards/shadows, just black with orange grid lines.
+   Green/red for gains/losses is kept (Bloomberg uses the same convention),
+   just brightened since the old values were tuned against a lighter
+   dark-purple background and read as muddy against true black. */
 .dark {
-  --c-bg: #14131f;
-  --c-panel: #1e1c2b;
-  --c-panel-alt: rgba(255, 255, 255, 0.05);
-  --c-panel-raised: #262436;
-  --c-border: rgba(255, 255, 255, 0.1);
-  --c-text: #f2f0fa;
-  --c-dim: #a9a6c0;
-  --c-long: #22a86d;
-  --c-short: #d9534f;
-  --c-accent: #8f7ff0;
-  --c-warn: #b8791a;
-  --c-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  --c-bg: #000000;
+  --c-panel: #0a0a0a;
+  --c-panel-alt: rgba(255, 165, 0, 0.07);
+  --c-panel-raised: #161616;
+  --c-border: rgba(255, 165, 0, 0.18);
+  --c-border-soft: rgba(255, 165, 0, 0.09);
+  --c-text: #ffa500;
+  --c-dim: #b5851f;
+  --c-long: #00e676;
+  --c-short: #ff3b30;
+  --c-accent: #ffb020;
+  --c-warn: #ffd60a;
+  --c-shadow: 0 0 0 1px rgba(255, 165, 0, 0.06), 0 8px 30px rgba(0, 0, 0, 0.7);
 
-  --chart-1: #3987e5;
-  --chart-2: #199e70;
-  --chart-3: #c98500;
-  --chart-4: #008300;
-  --chart-5: #9085e9;
-  --chart-6: #e66767;
-  --chart-7: #d55181;
-  --chart-8: #d95926;
+  --chart-1: #4fa8ff;
+  --chart-2: #00e676;
+  --chart-3: #ffd60a;
+  --chart-4: #ffa500;
+  --chart-5: #b39bff;
+  --chart-6: #ff3b30;
+  --chart-7: #ff6ec7;
+  --chart-8: #ff8c42;
 }
 
 * { box-sizing: border-box; }

@@ -7,6 +7,11 @@ function vs200Ema(row) {
   return ((row.current - ema200) / ema200) * 100;
 }
 
+function vsFairValue(row) {
+  if (row.fairValue == null || !row.current) return null;
+  return ((row.current - row.fairValue) / row.fairValue) * 100;
+}
+
 function PctBadge({ value }) {
   if (value == null) return "—";
   return (
@@ -19,7 +24,8 @@ function PctBadge({ value }) {
 
 // Bias/trend label badge shared by the Weekly and Daily columns — same
 // bullish/bearish/neutral coloring convention as the existing Trend column.
-function BiasBadge({ value }) {
+// Exported for reuse by HedgedPortfolioPanel's regime column.
+export function BiasBadge({ value }) {
   if (value == null) return <span className="text-dim">—</span>;
   return <span className={value === "bullish" ? "text-position-long" : value === "bearish" ? "text-position-short" : "text-dim"}>{value}</span>;
 }
@@ -48,6 +54,21 @@ function ZScoreBadge({ value }) {
   const extreme = Math.abs(value) >= 2;
   const className = extreme ? (value < 0 ? "text-position-long" : "text-position-short") : "text-dim";
   return <span className={className}>{value.toFixed(2)}</span>;
+}
+
+// % distance between current price and fairValue (the same 20-period
+// rolling mean the z-score column measures against) — same contrarian
+// color convention as ZScoreBadge, deliberately the opposite of PctBadge's
+// trend-following green-up/red-down: price sitting *above* fair value is a
+// reversion-risk read (colored like a short bias), not a bullish one.
+function FairValueBadge({ value }) {
+  if (value == null) return "—";
+  return (
+    <span className={value >= 0 ? "text-position-short" : "text-position-long"}>
+      {value >= 0 ? "+" : ""}
+      {value.toFixed(1)}%
+    </span>
+  );
 }
 
 // Shared by the scan table and the watchlist table (both show the same
@@ -98,6 +119,13 @@ export function buildScanColumns(watchlist) {
       ),
     },
     { key: "current", title: "Price", align: "right", sortValue: (r) => r.current ?? 0, formatter: (r) => fmt(r.current) },
+    {
+      key: "fairValue",
+      title: "vs Fair Value",
+      align: "right",
+      sortValue: (r) => vsFairValue(r) ?? 0,
+      formatter: (r) => <FairValueBadge value={vsFairValue(r)} />,
+    },
     {
       key: "trendPct",
       title: "Trend %",

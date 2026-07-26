@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Dropdown from "./Dropdown.jsx";
 
 // Single row, memoized so that clicking sort/filter/page controls only
 // re-renders the rows that actually changed position/content instead of the
@@ -7,7 +8,7 @@ const TableRow = memo(function TableRow({ row, columns, onRowClick }) {
   return (
     <tr
       onClick={onRowClick ? () => onRowClick(row) : undefined}
-      className={`border-b border-edge/50 transition-colors duration-100 last:border-0 hover:bg-panel-alt ${onRowClick ? "cursor-pointer" : ""}`}
+      className={`border-b border-edge-soft transition-colors duration-100 last:border-0 hover:bg-panel-alt ${onRowClick ? "cursor-pointer" : ""}`}
     >
       {columns.map((c) => (
         <td
@@ -61,7 +62,7 @@ function TableMenu({ onExport }) {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-label="Table options"
-        className="flex h-6 w-6 items-center justify-center rounded text-dim transition-colors duration-150 hover:bg-panel-alt hover:text-ink"
+        className="flex h-6 w-6 items-center justify-center rounded border-0 text-dim transition-colors duration-150 hover:bg-panel-alt hover:text-ink"
       >
         ⋯
       </button>
@@ -73,7 +74,7 @@ function TableMenu({ onExport }) {
               onExport();
               setOpen(false);
             }}
-            className="block w-full px-3 py-1.5 text-left text-xs text-ink transition-colors duration-150 hover:bg-panel-alt"
+            className="block w-full border-0 px-3 py-1.5 text-left text-xs text-ink transition-colors duration-150 hover:bg-panel-alt"
           >
             Export CSV
           </button>
@@ -141,12 +142,12 @@ export default function DataTable({ columns, data, initialSort, emptyText = "No 
   return (
     <div className="flex flex-col">
       {exportFilename && sorted.length > 0 && (
-        <div className="flex items-center justify-end border-b border-edge/70 px-2 py-1">
+        <div className="flex items-center justify-end border-b border-edge px-2 py-1">
           <TableMenu onExport={() => downloadCsv(exportFilename, columns, sorted)} />
         </div>
       )}
       <div className="table-scroll overflow-x-auto">
-        <table className="w-full border-collapse text-[13px]">
+        <table className="w-full border-separate border-spacing-0 text-[13px]">
           <thead className="sticky top-0 z-10 bg-panel">
             <tr>
               {columns.map((c) => {
@@ -155,7 +156,7 @@ export default function DataTable({ columns, data, initialSort, emptyText = "No 
                   <th
                     key={c.key}
                     style={c.width ? { width: c.width } : undefined}
-                    className={`border-b border-edge/70 p-0 whitespace-nowrap ${c.align === "right" ? "text-right" : "text-left"}`}
+                    className={`border-b border-edge p-0 whitespace-nowrap ${c.align === "right" ? "text-right" : "text-left"}`}
                   >
                     {c.sortable === false ? (
                       <span className="block px-3 py-2.5 text-[11px] font-medium uppercase tracking-wide text-dim">{c.title}</span>
@@ -163,7 +164,7 @@ export default function DataTable({ columns, data, initialSort, emptyText = "No 
                       <button
                         type="button"
                         onClick={() => toggleSort(c.key)}
-                        className={`group flex w-full items-center gap-1 px-3 py-2.5 text-[11px] font-medium uppercase tracking-wide transition-colors duration-150 hover:text-ink ${c.align === "right" ? "justify-end" : ""} ${active ? "text-ink" : "text-dim"}`}
+                        className={`group flex w-full items-center gap-1 border-0 px-3 py-2.5 text-[11px] font-medium uppercase tracking-wide transition-colors duration-150 hover:text-ink ${c.align === "right" ? "justify-end" : ""} ${active ? "text-ink" : "text-dim"}`}
                       >
                         <span>{c.title}</span>
                         <span
@@ -180,27 +181,23 @@ export default function DataTable({ columns, data, initialSort, emptyText = "No 
             </tr>
             <tr>
               {columns.map((c) => (
-                <th key={c.key} className="border-b border-edge/70 px-2 pb-2">
+                <th key={c.key} className="border-b border-edge px-2 pb-2">
                   {c.filter === "text" && (
                     <input
                       type="text"
                       placeholder="Filter…"
                       value={filters[c.key] ?? ""}
                       onChange={(e) => setFilter(c.key, e.target.value)}
-                      className="w-full rounded border-0 border-b border-transparent bg-transparent px-1 py-1 text-xs text-ink placeholder:text-dim/70 transition-colors duration-150 hover:bg-panel-alt focus:border-b-ink/30 focus:bg-panel-alt focus:outline-none"
+                      className="w-full appearance-none rounded border-0 border-b border-transparent bg-transparent px-1 py-1 text-xs text-ink shadow-none outline-none placeholder:text-dim/70 transition-colors duration-150 hover:bg-panel-alt focus:border-b-ink/30 focus:bg-panel-alt focus:outline-none"
                     />
                   )}
                   {c.filter === "select" && (
-                    <select
+                    <Dropdown
                       value={filters[c.key] ?? ""}
-                      onChange={(e) => setFilter(c.key, e.target.value)}
-                      className="w-full rounded border-0 bg-transparent px-1 py-1 text-xs text-ink transition-colors duration-150 hover:bg-panel-alt focus:bg-panel-alt focus:outline-none"
-                    >
-                      <option value="">All</option>
-                      {(selectOptions[c.key] ?? []).map((v) => (
-                        <option key={v} value={v}>{v}</option>
-                      ))}
-                    </select>
+                      onChange={(v) => setFilter(c.key, v)}
+                      options={(selectOptions[c.key] ?? []).map((v) => ({ value: v, label: v }))}
+                      className="w-full"
+                    />
                   )}
                 </th>
               ))}
@@ -222,7 +219,7 @@ export default function DataTable({ columns, data, initialSort, emptyText = "No 
           </tbody>
         </table>
       </div>
-      <div className="flex items-center justify-between border-t border-edge/70 px-3.5 py-2.5 text-xs text-dim">
+      <div className="flex items-center justify-between border-t border-edge px-3.5 py-2.5 text-xs text-dim">
         <div className="flex items-center gap-3">
           <span>{data.length ? `${sorted.length} of ${data.length}` : ""}</span>
         </div>
@@ -231,7 +228,7 @@ export default function DataTable({ columns, data, initialSort, emptyText = "No 
             type="button"
             disabled={clampedPage <= 1}
             onClick={() => setPage((p) => p - 1)}
-            className="h-6 w-6 rounded text-ink transition-colors duration-150 disabled:opacity-30 enabled:hover:bg-panel-alt"
+            className="h-6 w-6 rounded border-0 text-ink transition-colors duration-150 disabled:opacity-30 enabled:hover:bg-panel-alt"
           >
             ‹
           </button>
@@ -240,19 +237,20 @@ export default function DataTable({ columns, data, initialSort, emptyText = "No 
             type="button"
             disabled={clampedPage >= totalPages}
             onClick={() => setPage((p) => p + 1)}
-            className="h-6 w-6 rounded text-ink transition-colors duration-150 disabled:opacity-30 enabled:hover:bg-panel-alt"
+            className="h-6 w-6 rounded border-0 text-ink transition-colors duration-150 disabled:opacity-30 enabled:hover:bg-panel-alt"
           >
             ›
           </button>
-          <select
+          <Dropdown
             value={pageSize}
-            onChange={(e) => { setPageSize(parseInt(e.target.value)); setPage(1); }}
-            className="rounded border-0 bg-transparent px-1.5 py-1 text-xs text-ink transition-colors duration-150 hover:bg-panel-alt focus:outline-none"
-          >
-            {[10, 20, 50, 100].map((n) => (
-              <option key={n} value={n}>{n} / page</option>
-            ))}
-          </select>
+            onChange={(v) => {
+              setPageSize(Number(v));
+              setPage(1);
+            }}
+            options={[10, 20, 50, 100].map((n) => ({ value: n, label: `${n} / page` }))}
+            clearable={false}
+            className="w-24"
+          />
         </div>
       </div>
     </div>

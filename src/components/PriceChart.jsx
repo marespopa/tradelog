@@ -1,6 +1,6 @@
 // Candlestick + volume chart (via lightweight-charts).
 import { useEffect, useRef } from "react";
-import { createChart, CandlestickSeries, HistogramSeries, CrosshairMode } from "lightweight-charts";
+import { createChart, CandlestickSeries, HistogramSeries, LineSeries, CrosshairMode } from "lightweight-charts";
 
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -40,11 +40,14 @@ function toChartTime(ms) {
   return Math.floor(ms / 1000) - TZ_OFFSET_SEC;
 }
 
-export default function PriceChart({ times, opens, highs, lows, closes, volumes, live, height = 320 }) {
+export default function PriceChart({ times, opens, highs, lows, closes, volumes, live, channel, height = 320 }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
   const volumeSeriesRef = useRef(null);
+  const channelUpperRef = useRef(null);
+  const channelMidRef = useRef(null);
+  const channelLowerRef = useRef(null);
 
   const hasData = times?.length >= 2 && closes?.length === times.length;
 
@@ -84,15 +87,36 @@ export default function PriceChart({ times, opens, highs, lows, closes, volumes,
     });
     volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
 
+    // Channel overlay (optional — see the `channel` prop effect below for
+    // when data actually gets set). Created upfront alongside the other
+    // series rather than added/removed on toggle, so switching the
+    // "Channel" button on/off is just a setData([]) instead of managing
+    // series lifecycle.
+    const channelMid = chart.addSeries(LineSeries, {
+      color: theme.accent, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    const channelUpper = chart.addSeries(LineSeries, {
+      color: `${theme.accent}99`, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    const channelLower = chart.addSeries(LineSeries, {
+      color: `${theme.accent}99`, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+
     chartRef.current = chart;
     seriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
+    channelMidRef.current = channelMid;
+    channelUpperRef.current = channelUpper;
+    channelLowerRef.current = channelLower;
 
     return () => {
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
       volumeSeriesRef.current = null;
+      channelMidRef.current = null;
+      channelUpperRef.current = null;
+      channelLowerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [height]);
@@ -112,6 +136,9 @@ export default function PriceChart({ times, opens, highs, lows, closes, volumes,
       seriesRef.current?.applyOptions({
         upColor: theme.green, downColor: theme.red, wickUpColor: theme.green, wickDownColor: theme.red,
       });
+      channelMidRef.current?.applyOptions({ color: theme.accent });
+      channelUpperRef.current?.applyOptions({ color: `${theme.accent}99` });
+      channelLowerRef.current?.applyOptions({ color: `${theme.accent}99` });
     };
     const observer = new MutationObserver(applyTheme);
     observer.observe(target, { attributes: true, attributeFilter: ["class"] });
@@ -144,6 +171,21 @@ export default function PriceChart({ times, opens, highs, lows, closes, volumes,
     chartRef.current?.timeScale().fitContent();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [times, opens, highs, lows, closes, volumes, hasData]);
+
+  // Channel overlay: setData([]) clears it when toggled off or unavailable
+  // (e.g. not enough history yet), rather than removing/re-adding series.
+  useEffect(() => {
+    if (!channelMidRef.current || !channelUpperRef.current || !channelLowerRef.current) return;
+    if (!channel?.length) {
+      channelMidRef.current.setData([]);
+      channelUpperRef.current.setData([]);
+      channelLowerRef.current.setData([]);
+      return;
+    }
+    channelMidRef.current.setData(channel.map((c) => ({ time: toChartTime(c.time), value: c.mid })));
+    channelUpperRef.current.setData(channel.map((c) => ({ time: toChartTime(c.time), value: c.upper })));
+    channelLowerRef.current.setData(channel.map((c) => ({ time: toChartTime(c.time), value: c.lower })));
+  }, [channel]);
 
   // Push live (in-progress candle) ticks straight into the series via
   // update() rather than setData(), so the chart doesn't redraw/refit on

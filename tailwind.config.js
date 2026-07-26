@@ -20,6 +20,7 @@ export default {
         "panel-alt": "var(--c-panel-alt)",
         "panel-raised": "var(--c-panel-raised)",
         edge: "var(--c-border)",
+        "edge-soft": "var(--c-border-soft)",
         ink: "var(--c-text)",
         dim: "var(--c-dim)",
         position: {

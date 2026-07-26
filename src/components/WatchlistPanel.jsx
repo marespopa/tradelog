@@ -68,15 +68,15 @@ export default function WatchlistPanel({ watchlist, onSelectSymbol }) {
           />
 
           {unscanned.length > 0 && (
-            <div className="border-t border-edge/70 px-5 py-3 text-[12px] text-dim">
+            <div className="border-t border-edge px-5 py-3 text-[12px] text-dim">
               <p className="mb-2">Watched but outside the top-volume scan:</p>
-              <table className="w-full border-collapse text-[13px]">
+              <table className="w-full border-separate border-spacing-0 text-[13px]">
                 <tbody>
                   {unscanned.map((symbol) => (
                     <tr
                       key={symbol}
                       onClick={() => onSelectSymbol?.(symbol)}
-                      className="cursor-pointer border-b border-edge/50 last:border-0 hover:bg-panel-alt"
+                      className="cursor-pointer border-b border-edge-soft last:border-0 hover:bg-panel-alt"
                     >
                       <td className="w-8 py-1.5">
                         <WatchButton active onToggle={() => watchlist.toggle(symbol)} />

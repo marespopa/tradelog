@@ -1,10 +1,31 @@
 // Walk-forward backtest of the beta-neutral long/short basket (see
 // src/lib/analysis/betaNeutral.js): every REBALANCE_DAYS, rank the top-volume
-// coins by alpha vs BTC over the trailing LOOKBACK_DAYS, long the strongest,
-// short the weakest, weight each leg inverse-beta, hold for one rebalance
-// period, repeat. No parameter search happened to produce this — LOOKBACK,
-// REBALANCE, and basket size were picked once as reasonable starting values
-// before running, not tuned afterward to make the number green.
+// coins by alpha vs BTC over the trailing LOOKBACK_DAYS, veto any candidate
+// whose Weekly+Daily trend regime (mtfSetup.js's mtfRegime) actively
+// disagrees with the leg direction, long the strongest of what's left,
+// short the weakest, size the short leg's notional to zero out net beta,
+// hold for one rebalance period, repeat. No parameter search happened to
+// produce this — LOOKBACK, REBALANCE, and basket size were picked once as
+// reasonable starting values before running, not tuned afterward to make
+// the number green.
+//
+// 20 symbols, ~800 days, 2026-07-26 — three variants tested here, in order:
+//   1. Original construction (dollar-neutral $1/$1 legs, no regime veto):
+//      avg |net beta| 0.742 — NOT actually hedged despite the name, a bug
+//      in the per-name inverse-beta weighting (it balances exposure within
+//      a leg, not across legs). -7.0% return, Sharpe 0.36, 69.6% max DD.
+//   2. Beta-fix only (short leg notional scaled to zero net beta), no
+//      regime veto: avg |net beta| 0.000 (fixed) but -27.1% return, Sharpe
+//      0.03, 65.2% max DD — worse than #1, because #1's better-looking
+//      number was largely luck: an accidental net-short-BTC tilt that paid
+//      off while crypto broadly declined over this window, not skill.
+//   3. Beta-fix + regime veto (current code): avg |net beta| 0.010,
+//      -9.8% return, Sharpe 0.22, 55.0% max DD — a real, substantial
+//      improvement over #2 (7x the Sharpe, 10pp less drawdown), meaning the
+//      regime filter is doing genuine work. Still net-negative overall
+//      though: this is an improvement on a losing strategy, not a proven
+//      edge. Don't size real capital off this without a longer/cleaner
+//      validation window.
 //
 // Not modeled: funding/borrow cost for the short leg (crypto shorting is a
 // perp/margin position in practice, not spot — this backtests the spread
@@ -12,6 +33,7 @@
 // assumption, and unequal capital available per leg.
 import { fetchTopVolumeTickers, fetchCandleHistory } from "../src/lib/analysis/okx.js";
 import { computeBetaAlpha, buildBetaNeutralBasket } from "../src/lib/analysis/betaNeutral.js";
+import { mtfRegime } from "../src/lib/analysis/mtfSetup.js";
 import { writeFileSync, mkdirSync } from "node:fs";
 
 const SYMBOL_COUNT = 40;
@@ -50,14 +72,18 @@ async function main() {
   // Align everyone to BTC's timestamps so window slicing by index is valid
   // across symbols — drop any symbol whose daily candles don't line up with
   // BTC's (gaps from exchange listing history) rather than risk misaligned
-  // return windows.
+  // return windows. Keeps full candle objects (not just closes) so regime
+  // (mtfRegime, which needs OHLC to resample weekly) can be computed as of
+  // any index `t` using only alignedCandles[symbol].slice(0, t + 1) — no
+  // lookahead.
   const btcTimes = btcCandles.map((c) => c.time);
-  const aligned = {};
+  const alignedCandles = {};
   for (const [symbol, candles] of Object.entries(histories)) {
     const bySymbolTime = new Map(candles.map((c) => [c.time, c]));
     if (!btcTimes.every((t) => bySymbolTime.has(t))) continue;
-    aligned[symbol] = btcTimes.map((t) => bySymbolTime.get(t).close);
+    alignedCandles[symbol] = btcTimes.map((t) => bySymbolTime.get(t));
   }
+  const aligned = Object.fromEntries(Object.entries(alignedCandles).map(([symbol, candles]) => [symbol, candles.map((c) => c.close)]));
   console.log(`\n${Object.keys(aligned).length - 1} symbols aligned with BTC's ${btcTimes.length}-day history (excluding BTC itself).`);
 
   const marketCloses = aligned.BTC;
@@ -80,19 +106,31 @@ async function main() {
 
     if (rows.length < LONG_COUNT + SHORT_COUNT) continue;
 
-    const basket = buildBetaNeutralBasket(rows, { longCount: LONG_COUNT, shortCount: SHORT_COUNT });
-    netBetaSum += basket.netBeta;
+    const regimeBySymbol = {};
+    for (const { symbol } of rows) regimeBySymbol[symbol] = mtfRegime(alignedCandles[symbol].slice(0, t + 1));
+
+    const basket = buildBetaNeutralBasket(rows, { longCount: LONG_COUNT, shortCount: SHORT_COUNT, regimeBySymbol });
+    // Sum of |netBeta| — the label below is "avg |net beta|"; summing the
+    // signed value would let a positive-net-beta period cancel a
+    // negative-net-beta one and hide exactly the problem this backtest is
+    // meant to catch.
+    netBetaSum += Math.abs(basket.netBeta);
 
     const forwardReturn = (symbol) => aligned[symbol][t + REBALANCE_DAYS] / aligned[symbol][t] - 1;
     const longReturn = basket.longs.reduce((s, r) => s + r.weight * forwardReturn(r.symbol), 0);
     const shortReturn = basket.shorts.reduce((s, r) => s + r.weight * forwardReturn(r.symbol), 0);
-    const periodReturn = longReturn - shortReturn - ROUND_TRIP_COST_PCT;
+    // Cost scales with actual notional traded (long + short legs), not a
+    // flat assumption — now that the short leg's total size varies with
+    // longBeta/shortBeta instead of always matching the long leg's $1.
+    const cost = ROUND_TRIP_COST_PCT * (basket.longNotional + basket.shortNotional);
+    const periodReturn = longReturn - shortReturn - cost;
 
     equity *= 1 + periodReturn;
     equityCurve.push({ time: btcTimes[t + REBALANCE_DAYS], equity });
     periods.push({
       time: new Date(btcTimes[t]).toISOString().slice(0, 10),
       netBeta: basket.netBeta,
+      shortNotional: basket.shortNotional,
       longs: basket.longs.map((r) => r.symbol),
       shorts: basket.shorts.map((r) => r.symbol),
       longReturn,

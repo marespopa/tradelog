@@ -88,6 +88,46 @@ function bollinger(closes, period = 20, mult = 2) {
   };
 }
 
+// Linear regression price channel: least-squares trendline through closes
+// over the window, plus parallel upper/lower bands at `stdMult` standard
+// deviations of the residuals — a channel in the classic technical-analysis
+// sense (two parallel bounding lines whose slope reflects the prevailing
+// trend), distinct from Bollinger Bands (which band a flat rolling mean,
+// not a sloped trendline) and from findSwingLevels (which maps discrete
+// pivot levels, not a continuous band). `lookback` omitted uses the whole
+// candle series passed in, so the channel spans whatever window the chart
+// itself is showing rather than a fixed bar count that would read
+// differently across timeframes. Returns null if there isn't enough
+// history yet (fewer than 10 bars).
+export function linearRegressionChannel(candles, { lookback, stdMult = 2 } = {}) {
+  const window = lookback ? candles.slice(-lookback) : candles;
+  const n = window.length;
+  if (n < 10) return null;
+
+  const xs = window.map((_, i) => i);
+  const ys = window.map((c) => c.close);
+  const xMean = mean(xs);
+  const yMean = mean(ys);
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - xMean) * (ys[i] - yMean);
+    den += (xs[i] - xMean) ** 2;
+  }
+  const slope = den !== 0 ? num / den : 0;
+  const intercept = yMean - slope * xMean;
+
+  // OLS residuals have zero mean by construction, so stddev can skip
+  // re-deriving it from the residuals themselves.
+  const residuals = window.map((c, i) => c.close - (slope * i + intercept));
+  const residualStd = stddev(residuals, 0);
+
+  return window.map((c, i) => {
+    const mid = slope * i + intercept;
+    return { time: c.time, mid, upper: mid + stdMult * residualStd, lower: mid - stdMult * residualStd };
+  });
+}
+
 // Mean-reversion z-score: how many standard deviations the current close sits
 // from its own rolling mean. This is a *contrarian* signal — deliberately
 // separate from RSI's momentum reading, not a duplicate of it: a market can
@@ -566,6 +606,11 @@ export function analyzeCandles(candles, symbol) {
     holdingNeckline,
     rsiValue,
     zScore: z,
+    // The same 20-period rolling mean z-score measures distance from — the
+    // "fair value" anchor a mean-reversion read implies price should sit
+    // near, shown as its own price level rather than only as the
+    // standardized distance the z-score column already reports.
+    fairValue: rollingMean(closes),
     relativeVolume: relVol,
     atr: volatility,
     atrPct: volatility != null ? (volatility / current) * 100 : null,
