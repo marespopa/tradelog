@@ -2,12 +2,8 @@ import { useEffect, useState } from "react";
 
 export const fmt = (n, decimals) => {
   if (n == null || isNaN(n)) return "—";
-  if (decimals != null) return n.toFixed(decimals);
-  const abs = Math.abs(n);
-  if (abs < 0.0001) return n.toFixed(8);
-  if (abs < 1) return n.toFixed(4);
-  if (abs < 100) return n.toFixed(3);
-  return n.toFixed(2);
+  const d = decimals ?? (Math.abs(n) < 0.0001 ? 8 : Math.abs(n) < 1 ? 4 : Math.abs(n) < 100 ? 3 : 2);
+  return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 };
 
 export const fmtUsd = (n) => {

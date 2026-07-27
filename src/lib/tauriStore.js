@@ -8,3 +8,13 @@ export function getStore() {
   if (!storePromise) storePromise = load("app-data.json", { autoSave: false });
   return storePromise;
 }
+
+let candleCacheStorePromise = null;
+
+// Separate file from app-data.json: cached OHLC history (candleCache.js)
+// is orders of magnitude larger than trades/watchlist/strategies, so it
+// shouldn't slow down every read/write of the small stuff by sharing a file.
+export function getCandleCacheStore() {
+  if (!candleCacheStorePromise) candleCacheStorePromise = load("candle-cache.json", { autoSave: false });
+  return candleCacheStorePromise;
+}

@@ -13,16 +13,21 @@ const CANDIDATE_COUNT = 80;
 const DAILY_LOOKBACK_BARS = 250;
 // Quality floor on alpha vs BTC over that same window: a coin that's merely
 // tracking BTC isn't worth tying up capital in for a month-plus over just
-// holding BTC itself. Not tuned/backtested standalone — same caveat as
-// betaNeutral.js's construction (this reuses its computeBetaAlpha/
-// computeExtension primitives, just against daily bars and a long-only
-// filter instead of a long/short basket).
+// holding BTC itself. Now backtested — see scripts/backtest-long-term-holds.js,
+// which walks this exact filter forward with a 30-day hold. Result was
+// net-negative: 32.6% pick-level hit rate vs BTC (should be ~50%+ for a real
+// edge) and -4.45% mean alpha achieved per pick, i.e. the trailing alpha this
+// filters on does not persist forward — screening on "beat BTC over the last
+// 250 days" looks mean-reverting, not momentum-persistent, over the next 30.
+// Kept live pending a product decision on whether/how to revise this screen
+// (see the backtest script's full write-up for caveats before concluding
+// further).
 const MIN_ALPHA = 0.05;
 const RESULT_COUNT = 15;
 
 // Long-only, position-trade (think 1-month-minimum hold, not a swing entry)
 // candidates: Weekly bias and Daily trend must agree bullish — a slow,
-// persistent read appropriate for a hold this long, unlike the Scan tab's
+// persistent read appropriate for a hold this long, unlike the swing scan's
 // 4H entry timing — the coin must be beating BTC on a risk-adjusted basis
 // (alpha, not just raw price change) rather than just riding the market up,
 // and it can't already be extended (overbought / near the top of its own

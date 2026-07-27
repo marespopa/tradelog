@@ -4,6 +4,8 @@ import WatchButton from "./WatchButton.jsx";
 import { useCoinAnalysis } from "../hooks/useCoinAnalysis.js";
 import { TIMEFRAMES } from "../lib/analysis/okx.js";
 import { linearRegressionChannel } from "../lib/analysis/ta.js";
+import { detectChartPattern } from "../lib/analysis/chartPatterns.js";
+import { fmtPrice } from "../lib/format.js";
 
 const TIMEFRAME_LABEL = { "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "1w": "1W" };
 
@@ -17,7 +19,7 @@ const TREND_LABEL = { bullish: "Bullish", bearish: "Bearish", sideways: "Neutral
 export default function CoinAnalysis({ symbol: controlledSymbol, onSymbolChange, watchlist }) {
   const [symbol, setSymbol] = useState(controlledSymbol || "BTC");
   const [symbolInput, setSymbolInput] = useState(symbol);
-  const [timeframe, setTimeframe] = useState("1h");
+  const [timeframe, setTimeframe] = useState("4h");
   const [showChannel, setShowChannel] = useState(true);
 
   // Setup Finder (or a future deep link) can hand us a symbol directly —
@@ -50,6 +52,8 @@ export default function CoinAnalysis({ symbol: controlledSymbol, onSymbolChange,
   // count that would cover very different amounts of real time across
   // 15m vs 1D candles.
   const channel = useMemo(() => (data && showChannel ? linearRegressionChannel(data.candles) : null), [data, showChannel]);
+
+  const chartPattern = useMemo(() => (data ? detectChartPattern(data.candles, timeframe) : null), [data, timeframe]);
 
   const submitSymbol = (e) => {
     e.preventDefault();
@@ -114,13 +118,60 @@ export default function CoinAnalysis({ symbol: controlledSymbol, onSymbolChange,
               <span className={`rounded-full px-3 py-1 text-[12px] font-medium ${TREND_STYLE[analysis.trend]}`}>{TREND_LABEL[analysis.trend]}</span>
             </div>
 
-            {analysis.evaluation && (
+            {(chartPattern || analysis.evaluation) && (
               <div className="mt-4 rounded-lg border border-edge bg-panel-alt p-4 text-[13px] leading-relaxed text-ink">
-                <p className="font-medium">{analysis.evaluation.hook}</p>
-                <p className="mt-3 text-dim">{analysis.evaluation.body}</p>
-                {analysis.evaluation.quant && <p className="mt-3 text-dim">{analysis.evaluation.quant}</p>}
-                <p className="mt-3 text-dim">{analysis.evaluation.watch}</p>
-                <p className="mt-3 text-[12px] text-dim">⚠ Not financial advice.</p>
+                {chartPattern && (
+                  <>
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <h3 className="text-[14px] font-semibold">{chartPattern.title}</h3>
+                      <span className={`text-[12px] font-medium ${chartPattern.bias === "Bullish" ? "text-position-long" : "text-position-short"}`}>
+                        {chartPattern.trendClassLabel}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[12px] text-dim">
+                      {chartPattern.dateLabel} · {chartPattern.timeframeLabel}
+                    </p>
+
+                    <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-1.5 text-[12px] sm:grid-cols-2">
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-dim">Volume</dt>
+                        <dd>{chartPattern.volumeLabel}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-dim">Close Price</dt>
+                        <dd>{fmtPrice(chartPattern.closePrice)}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-dim">Target Price</dt>
+                        <dd>
+                          {fmtPrice(chartPattern.targetLow)} - {fmtPrice(chartPattern.targetHigh)}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-dim">Pattern Duration</dt>
+                        <dd>{chartPattern.patternDurationLabel}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-dim">Inbound Trend Duration</dt>
+                        <dd>{chartPattern.inboundTrendDurationLabel}</dd>
+                      </div>
+                    </dl>
+
+                    <p className="mt-3">
+                      <span className="font-medium">Tells Me:</span> {chartPattern.tellsMe}
+                    </p>
+                  </>
+                )}
+
+                {chartPattern && analysis.evaluation && <hr className="my-4 border-edge" />}
+
+                {analysis.evaluation && (
+                  <>
+                    <p>{analysis.evaluation.body}</p>
+                    {analysis.evaluation.quant && <p className="mt-2 text-dim">{analysis.evaluation.quant}</p>}
+                    <p className="mt-2 text-[11px] text-dim">Not financial advice.</p>
+                  </>
+                )}
               </div>
             )}
           </>

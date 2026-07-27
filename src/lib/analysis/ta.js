@@ -71,7 +71,7 @@ export function macd(closes, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9)
 // of the basis) flags a volatility squeeze when unusually tight — squeezes
 // often precede an expansion move, which is useful context a single ATR
 // number doesn't convey.
-function bollinger(closes, period = 20, mult = 2) {
+export function bollingerBands(closes, period = 20, mult = 2) {
   if (closes.length < period) return null;
   const window = closes.slice(-period);
   const basis = mean(window);
@@ -450,11 +450,11 @@ function describeBollinger(bb) {
   return null;
 }
 
-// Longer-form, quant-explainer read on the current structure — distinct from
-// buildNarrative's compact headline/warnings pair. Where buildNarrative feeds
-// small UI badges, this is meant to be read as prose: the structural event,
-// then each independent factor's actual value and what it means, so two
-// coins in the same structural bucket don't read identically when their
+// Compact quant-explainer read on the current structure — distinct from
+// buildNarrative's headline/warnings pair. One short paragraph on the
+// structural event (what broke, whether volume confirmed it, what would
+// invalidate it) plus each independent factor's actual value, so two coins
+// in the same structural bucket don't read identically when their
 // underlying numbers differ. Built entirely from already-computed
 // structure/momentum/volatility inputs, not a separate signal.
 function buildEvaluation({ symbol, trendLabel, current, neckline, floor, holdingNeckline, relVol, rsiValue, z, macdData, bollingerData }) {
@@ -466,30 +466,16 @@ function buildEvaluation({ symbol, trendLabel, current, neckline, floor, holding
   const quantReads = [describeRsi(rsiValue), describeZScore(z), describeMacd(macdData), describeBollinger(bollingerData)].filter(Boolean);
   const quantParagraph = quantReads.length ? quantReads.join(" ") : null;
 
+  let body;
   if (brokeUp) {
-    return {
-      hook: "🔷 The most valuable breakouts aren't the explosive candles. They're the ones that completely change the market structure. 👀",
-      body: `${tag} has broken above the level that kept sellers in control, and the reaction ${strongVolume ? "wasn't weak — it arrived with a decisive impulsive move" : "was relatively muted, without strong volume behind it yet"}. Buyers reclaimed a key horizontal level near ${fmt(neckline)} instead of bouncing randomly, suggesting this could be a structural shift rather than just another short-lived relief rally. 📈`,
-      quant: quantParagraph,
-      watch: `The next chapter depends on whether that broken level near ${fmt(neckline)} can flip into support. If buyers defend that area, the recent bearish sequence starts losing control and momentum continues to rotate in favor of bulls. That's the confirmation worth watching, not the size of any single candle.`,
-    };
+    body = `${tag} broke above the level that had capped sellers, near ${fmt(neckline)}, ${strongVolume ? "on strong volume" : "on light volume so far"}. Losing that level again would undo the breakout.`;
+  } else if (brokeDown) {
+    body = `${tag} broke below the level that had held buyers, near ${fmt(floor)}, ${strongVolume ? "on strong volume" : "on light volume so far"}. Reclaiming that level would undo the breakdown.`;
+  } else {
+    body = `${tag} is still range-bound, between resistance near ${fmt(neckline)} and support near ${fmt(floor)} — no decisive break yet.`;
   }
 
-  if (brokeDown) {
-    return {
-      hook: "🔻 The most damaging breakdowns aren't the panic candles. They're the ones that completely change the market structure. 👀",
-      body: `${tag} has broken below the level that kept buyers in control, and the reaction ${strongVolume ? "wasn't weak — it arrived with a decisive impulsive move" : "was relatively muted, without strong volume behind it yet"}. Sellers reclaimed a key horizontal level near ${fmt(floor)} instead of a random flush, suggesting this could be a structural shift rather than just another short-lived dip. 📉`,
-      quant: quantParagraph,
-      watch: `The next chapter depends on whether that broken level near ${fmt(floor)} can flip into resistance. If sellers defend that area, the recent bullish sequence starts losing control and momentum continues to rotate in favor of bears. That's the confirmation worth watching, not the size of any single candle.`,
-    };
-  }
-
-  return {
-    hook: "🔷 Not every big candle changes the market structure — most don't. 👀",
-    body: `${tag} is still trading inside its recent range, between the breakout level near ${fmt(neckline)} and support near ${fmt(floor)}, without a decisive move to either side yet.`,
-    quant: quantParagraph,
-    watch: `A confirmed structural shift here would mean price clearing one of those levels and holding it, not just tagging it intraday. Until then, the fair read is range-bound rather than trending.`,
-  };
+  return { body, quant: quantParagraph };
 }
 
 // Turns swing structure + ATR into an actual trade: entry (current price), a
@@ -563,7 +549,7 @@ export function analyzeCandles(candles, symbol) {
   const volume = volumeFactor(relVol, priceUp);
   const volatility = atr(candles);
   const macdData = macd(closes);
-  const bollingerData = bollinger(closes);
+  const bollingerData = bollingerBands(closes);
 
   const { neckline, swingLow, swingLowCandlesAgo } = findSwingStructure(candles);
   const { swingHigh, floor } = findBearishSwingStructure(candles);

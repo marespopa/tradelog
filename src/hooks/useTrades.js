@@ -15,6 +15,35 @@ function computeResult({ entryPrice, exitPrice, stopLoss, side }) {
   return { resultR, outcome };
 }
 
+// Shared by add() and update(): turns a form-shaped input (symbol/side/
+// entryPrice/etc, status "open"|"closed") into the stored trade fields,
+// nulling out exit-related fields for open trades and recomputing
+// resultR/outcome from scratch rather than trusting stale values.
+function deriveTradeFields(input) {
+  const isOpen = input.status === "open";
+  const entryPrice = input.entryPrice ?? null;
+  const exitPrice = isOpen ? null : input.exitPrice ?? null;
+  const stopLoss = input.stopLoss ?? null;
+  const side = input.side === "short" ? "short" : "long";
+  const { resultR, outcome } = isOpen
+    ? { resultR: null, outcome: null }
+    : computeResult({ entryPrice, exitPrice, stopLoss, side });
+  return {
+    symbol: input.symbol.trim().toUpperCase(),
+    side,
+    leverage: input.leverage || 1,
+    entryPrice,
+    entryTime: input.entryTime || null,
+    stopLoss,
+    targetPrice: input.targetPrice ?? null,
+    status: isOpen ? "open" : "closed",
+    exitPrice,
+    exitTime: isOpen ? null : input.exitTime || new Date().toISOString(),
+    outcome,
+    resultR,
+  };
+}
+
 // Manually logged trades (entry/exit/R/outcome), persisted to a JSON file
 // on disk via the Tauri store plugin so the journal survives reloads
 // without needing a backend — same pattern as useWatchlist. Trades can be
@@ -45,31 +74,16 @@ export function useTrades() {
   }, [trades]);
 
   const add = useCallback((trade) => {
-    const isOpen = trade.status === "open";
-    const entryPrice = trade.entryPrice ?? null;
-    const exitPrice = isOpen ? null : trade.exitPrice ?? null;
-    const stopLoss = trade.stopLoss ?? null;
-    const side = trade.side === "short" ? "short" : "long";
-    const { resultR, outcome } = isOpen
-      ? { resultR: null, outcome: null }
-      : computeResult({ entryPrice, exitPrice, stopLoss, side });
-    const entry = {
-      id: crypto.randomUUID(),
-      symbol: trade.symbol.trim().toUpperCase(),
-      side,
-      leverage: trade.leverage || 1,
-      entryPrice,
-      entryTime: trade.entryTime || null,
-      stopLoss,
-      targetPrice: trade.targetPrice ?? null,
-      status: isOpen ? "open" : "closed",
-      exitPrice,
-      exitTime: isOpen ? null : trade.exitTime || new Date().toISOString(),
-      outcome,
-      resultR,
-    };
+    const entry = { id: crypto.randomUUID(), ...deriveTradeFields(trade) };
     setTrades((t) => [entry, ...t]);
     return entry;
+  }, []);
+
+  // Re-derives every stored field (including resultR/outcome) from a full
+  // edit-form payload, same as add() — so fixing a typo'd entry price also
+  // recomputes R and win/loss instead of leaving them stale.
+  const update = useCallback((id, patch) => {
+    setTrades((t) => t.map((trade) => (trade.id === id ? { ...trade, ...deriveTradeFields(patch) } : trade)));
   }, []);
 
   // Fills in the exit price of a still-open trade, marks it closed, and
@@ -115,5 +129,5 @@ export function useTrades() {
 
   const recent = closedOnly[0] ?? null;
 
-  return { trades: sorted, add, close, remove, recent };
+  return { trades: sorted, add, update, close, remove, recent };
 }

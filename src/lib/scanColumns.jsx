@@ -22,16 +22,31 @@ function PctBadge({ value }) {
   );
 }
 
-// Bias/trend label badge shared by the Weekly and Daily columns — same
-// bullish/bearish/neutral coloring convention as the existing Trend column.
-// Exported for reuse by longTermColumns.jsx's Weekly/Daily columns.
-export function BiasBadge({ value }) {
-  if (value == null) return <span className="text-dim">—</span>;
-  return <span className={value === "bullish" ? "text-position-long" : value === "bearish" ? "text-position-short" : "text-dim"}>{value}</span>;
+// Exported for reuse by longTermColumns.jsx's combined Weekly/Daily badge.
+export function tfClass(bias) {
+  return bias === "bullish" ? "text-position-long" : bias === "bearish" ? "text-position-short" : "text-dim";
+}
+
+export function tfArrow(bias) {
+  return bias === "bullish" ? "▲" : bias === "bearish" ? "▼" : "–";
+}
+
+// Growth % + that same timeframe's own EMA-cross trend arrow in one cell —
+// folded together instead of a separate Weekly/Daily/4H "Trend" column, so
+// each of the 1h/4h/1d/1w columns carries both the move and its direction
+// read rather than spending a whole column on direction alone.
+function TrendGrowthBadge({ trend, pct }) {
+  if (pct == null) return "—";
+  return (
+    <span className={`tabular-nums ${tfClass(trend)}`}>
+      {tfArrow(trend)} {pct >= 0 ? "+" : ""}
+      {pct.toFixed(1)}%
+    </span>
+  );
 }
 
 // The live 3-tier entry: only set when Weekly bias, Daily trend, and the 4H
-// trigger all agree (see ScanPanel's merge of useSetupFinder + useMarketBias).
+// trigger all agree (see attachEntry's merge of useSetupFinder + useMarketBias).
 // Distinct from the raw per-timeframe badges above — this is the actual
 // "good entry" highlight, not just another stat.
 function EntryBadge({ trade }) {
@@ -75,9 +90,9 @@ function FairValueBadge({ value }) {
 // Weekly->Daily->4H swing-scan shape) so the two views can't drift out of
 // sync. `watchlist` is the useWatchlist() instance so a star column can be
 // prepended. Rows are expected to carry weeklyBias/dailyTrend/mtfTrade
-// (attached by ScanPanel's merge of useSetupFinder + useMarketBias) in
+// (attached by attachEntry's merge of useSetupFinder + useMarketBias) in
 // addition to the raw per-4H-candle stats from analyzeCandles().
-export function buildScanColumns(watchlist) {
+export function buildScanColumns(watchlist, { excludeKeys = [], showKeys = [] } = {}) {
   const columns = [
     { key: "symbol", title: "Symbol", filter: "text" },
     {
@@ -87,38 +102,61 @@ export function buildScanColumns(watchlist) {
       formatter: (r) => <EntryBadge trade={r.mtfTrade} />,
     },
     {
-      key: "weeklyBias",
-      title: "Weekly",
-      filter: "select",
-      filterValue: (r) => r.weeklyBias ?? "—",
-      sortValue: (r) => r.weeklyBias ?? "",
-      formatter: (r) => <BiasBadge value={r.weeklyBias} />,
-    },
-    {
-      key: "dailyTrend",
-      title: "Daily",
-      filter: "select",
-      filterValue: (r) => r.dailyTrend ?? "—",
-      sortValue: (r) => r.dailyTrend ?? "",
-      formatter: (r) => <BiasBadge value={r.dailyTrend} />,
-    },
-    {
       key: "rr",
       title: "R:R",
       align: "right",
       sortValue: (r) => r.mtfTrade?.rr ?? 0,
       formatter: (r) => (r.mtfTrade ? `1:${r.mtfTrade.rr}` : "—"),
     },
-    {
-      key: "trend",
-      title: "4H Trend",
-      filter: "select",
-      filterValue: (r) => r.trend,
-      formatter: (r) => (
-        <span className={r.trend === "bullish" ? "text-position-long" : r.trend === "bearish" ? "text-position-short" : "text-dim"}>{r.trend}</span>
-      ),
-    },
     { key: "current", title: "Price", align: "right", sortValue: (r) => r.current ?? 0, formatter: (r) => fmt(r.current) },
+    // Growth split per timeframe (each independently sortable) instead of a
+    // single 24h figure. 1h/4h/1d/1w also carry that same timeframe's own
+    // EMA-cross trend arrow (see TrendGrowthBadge) instead of spending a
+    // separate column on Weekly/Daily/4H direction alone. 15m has no EMA
+    // trend behind it (only 2 candles are fetched for it) so it stays a
+    // plain %.
+    {
+      key: "changePct15m",
+      title: "15m",
+      align: "right",
+      sortValue: (r) => r.changePct15m ?? 0,
+      formatter: (r) => <PctBadge value={r.changePct15m} />,
+    },
+    {
+      key: "changePct1h",
+      title: "1h",
+      align: "right",
+      sortValue: (r) => r.changePct1h ?? 0,
+      csvValue: (r) => `${r.hourlyTrend ?? "–"} ${r.changePct1h != null ? r.changePct1h.toFixed(1) + "%" : "—"}`,
+      formatter: (r) => <TrendGrowthBadge trend={r.hourlyTrend} pct={r.changePct1h} />,
+    },
+    {
+      key: "changePct4h",
+      title: "4h",
+      align: "right",
+      sortValue: (r) => r.changePct4h ?? 0,
+      csvValue: (r) => `${r.trend ?? "–"} ${r.changePct4h != null ? r.changePct4h.toFixed(1) + "%" : "—"}`,
+      formatter: (r) => <TrendGrowthBadge trend={r.trend} pct={r.changePct4h} />,
+    },
+    {
+      key: "changePct24h",
+      title: "1d",
+      align: "right",
+      sortValue: (r) => r.changePct24h ?? 0,
+      csvValue: (r) => `${r.dailyTrend ?? "–"} ${r.changePct24h != null ? r.changePct24h.toFixed(1) + "%" : "—"}`,
+      formatter: (r) => <TrendGrowthBadge trend={r.dailyTrend} pct={r.changePct24h} />,
+    },
+    {
+      key: "changePct1w",
+      title: "1w",
+      align: "right",
+      sortValue: (r) => r.changePct1w ?? 0,
+      csvValue: (r) => `${r.weeklyBias ?? "–"} ${r.changePct1w != null ? r.changePct1w.toFixed(1) + "%" : "—"}`,
+      formatter: (r) => <TrendGrowthBadge trend={r.weeklyBias} pct={r.changePct1w} />,
+    },
+    // 4H fair-value gap — kept visible (not folded into the expanded row
+    // with the other secondary stats below) since it's the most-watched
+    // number on the Market tab.
     {
       key: "fairValue",
       title: "vs Fair Value",
@@ -126,31 +164,19 @@ export function buildScanColumns(watchlist) {
       sortValue: (r) => vsFairValue(r) ?? 0,
       formatter: (r) => <FairValueBadge value={vsFairValue(r)} />,
     },
-    {
-      key: "trendPct",
-      title: "Trend %",
-      align: "right",
-      sortValue: (r) => r.factors?.trend?.separationPct ?? 0,
-      formatter: (r) => <PctBadge value={r.factors?.trend?.separationPct} />,
-    },
+    // Hidden from the table itself (shown in the expanded row instead) so
+    // the collapsed table stays scannable — see renderScanDetails below.
     {
       key: "vs200Ema",
       title: "vs 200EMA",
-      align: "right",
+      hidden: true,
       sortValue: (r) => vs200Ema(r) ?? 0,
       formatter: (r) => <PctBadge value={vs200Ema(r)} />,
     },
-    {
-      key: "changePct24h",
-      title: "24h",
-      align: "right",
-      sortValue: (r) => r.changePct24h ?? 0,
-      formatter: (r) => <PctBadge value={r.changePct24h} />,
-    },
-    { key: "rsiValue", title: "RSI", align: "right", sortValue: (r) => r.rsiValue ?? 0, formatter: (r) => (r.rsiValue != null ? r.rsiValue.toFixed(0) : "—") },
-    { key: "zScore", title: "Z-score", align: "right", sortValue: (r) => r.zScore ?? 0, formatter: (r) => <ZScoreBadge value={r.zScore} /> },
-    { key: "relativeVolume", title: "Rel. Vol", align: "right", sortValue: (r) => r.relativeVolume ?? 0, formatter: (r) => (r.relativeVolume != null ? `${r.relativeVolume.toFixed(2)}×` : "—") },
-    { key: "atrPct", title: "ATR%", align: "right", sortValue: (r) => r.atrPct ?? 0, formatter: (r) => (r.atrPct != null ? `${r.atrPct.toFixed(2)}%` : "—") },
+    { key: "rsiValue", title: "RSI", hidden: true, sortValue: (r) => r.rsiValue ?? 0, formatter: (r) => (r.rsiValue != null ? r.rsiValue.toFixed(0) : "—") },
+    { key: "zScore", title: "Z-score", hidden: true, sortValue: (r) => r.zScore ?? 0, formatter: (r) => <ZScoreBadge value={r.zScore} /> },
+    { key: "relativeVolume", title: "Rel. Vol", hidden: true, sortValue: (r) => r.relativeVolume ?? 0, formatter: (r) => (r.relativeVolume != null ? `${r.relativeVolume.toFixed(2)}×` : "—") },
+    { key: "atrPct", title: "ATR%", hidden: true, sortValue: (r) => r.atrPct ?? 0, formatter: (r) => (r.atrPct != null ? `${r.atrPct.toFixed(2)}%` : "—") },
   ];
 
   if (watchlist) {
@@ -163,5 +189,30 @@ export function buildScanColumns(watchlist) {
     });
   }
 
-  return columns;
+  return columns
+    .map((c) => (showKeys.includes(c.key) ? { ...c, hidden: false } : c))
+    .filter((c) => !excludeKeys.includes(c.key));
+}
+
+// Secondary stats hidden from the collapsed row: EMA deviation, momentum
+// (RSI, Z-score), and volatility (rel. volume, ATR%). vs Fair Value stays
+// in the main row (see buildScanColumns) since it's the most-watched number.
+export function renderScanDetails(row) {
+  const items = [
+    { label: "vs 200 EMA", value: <PctBadge value={vs200Ema(row)} /> },
+    { label: "RSI", value: row.rsiValue != null ? row.rsiValue.toFixed(0) : "—" },
+    { label: "Z-score", value: <ZScoreBadge value={row.zScore} /> },
+    { label: "Rel. Volume", value: row.relativeVolume != null ? `${row.relativeVolume.toFixed(2)}×` : "—" },
+    { label: "ATR %", value: row.atrPct != null ? `${row.atrPct.toFixed(2)}%` : "—" },
+  ];
+  return (
+    <dl className="grid grid-cols-2 gap-x-6 gap-y-2.5 sm:grid-cols-4">
+      {items.map((it) => (
+        <div key={it.label}>
+          <dt className="text-[10px] font-medium uppercase tracking-wide text-dim">{it.label}</dt>
+          <dd className="mt-0.5 text-[13px] text-ink">{it.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
 }

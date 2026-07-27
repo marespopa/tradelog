@@ -1,30 +1,33 @@
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { useTheme } from "./hooks/useTheme.js";
 import { useWatchlist } from "./hooks/useWatchlist.js";
 import { useTrades } from "./hooks/useTrades.js";
-import CoinAnalysis from "./components/CoinAnalysis.jsx";
-import ScanPanel from "./components/ScanPanel.jsx";
-import MarketPanel from "./components/MarketPanel.jsx";
-import WatchlistPanel from "./components/WatchlistPanel.jsx";
-import TradesPanel from "./components/TradesPanel.jsx";
-import LongTermPanel from "./components/LongTermPanel.jsx";
+
+const CoinAnalysis = lazy(() => import("./components/CoinAnalysis.jsx"));
+const MarketPanel = lazy(() => import("./components/MarketPanel.jsx"));
+const WatchlistPanel = lazy(() => import("./components/WatchlistPanel.jsx"));
+const TradesPanel = lazy(() => import("./components/TradesPanel.jsx"));
+const StrategiesPanel = lazy(() => import("./components/StrategiesPanel.jsx"));
 
 // Scan the top-volume market for position-trading candidates, then act on
 // what you find. Analysis (chart/stats/sizing) isn't a nav tab — it's a
 // drill-down reached by clicking a row from any of the scan-like tabs.
-const TABS = new Set(["scan", "market", "watchlist", "trades", "longterm", "analysis"]);
+// (No "longterm" tab: LongTermPanel.jsx's screen backtested net-negative —
+// see scripts/backtest-long-term-holds.js — so it was retired from the UI
+// the same way the beta-neutral Hedged tab was before it. Kept for
+// reference, not deleted.)
+const TABS = new Set(["market", "watchlist", "trades", "strategies", "analysis"]);
 const NAV_TABS = [
-  { key: "scan", label: "Scan" },
   { key: "market", label: "Market" },
   { key: "watchlist", label: "Watchlist" },
   { key: "trades", label: "Trades" },
-  { key: "longterm", label: "Long-term" },
+  { key: "strategies", label: "Strategies" },
 ];
 
 function readUrlState() {
   const params = new URLSearchParams(window.location.search);
   const tab = params.get("tab");
-  return { tab: TABS.has(tab) ? tab : "scan", coin: params.get("coin") || null };
+  return { tab: TABS.has(tab) ? tab : "market", coin: params.get("coin") || null };
 }
 
 export default function App() {
@@ -34,7 +37,7 @@ export default function App() {
   const [{ tab, coin }, setUrlState] = useState(readUrlState);
   // Which nav tab to return to from analysis — set whenever a row is
   // clicked from scan or watchlist, so "Back" lands wherever you came from.
-  const [returnTab, setReturnTab] = useState("scan");
+  const [returnTab, setReturnTab] = useState("market");
 
   useEffect(() => {
     const onPopState = () => setUrlState(readUrlState());
@@ -104,28 +107,26 @@ export default function App() {
       </header>
 
       <main key={tab} className="animate-fade-in mx-auto flex max-w-[1400px] flex-col gap-5 px-7 py-6">
-        {tab === "scan" && <ScanPanel onSelectSymbol={(symbol) => selectCoin(symbol, "scan")} watchlist={watchlist} />}
+        <Suspense fallback={<div className="py-10 text-center text-[13px] text-dim">Loading…</div>}>
+          {tab === "market" && <MarketPanel onSelectSymbol={(symbol) => selectCoin(symbol, "market")} watchlist={watchlist} />}
 
-        {tab === "market" && <MarketPanel onSelectSymbol={(symbol) => selectCoin(symbol, "market")} watchlist={watchlist} />}
+          {tab === "watchlist" && (
+            <WatchlistPanel watchlist={watchlist} onSelectSymbol={(symbol) => selectCoin(symbol, "watchlist")} />
+          )}
 
-        {tab === "watchlist" && (
-          <WatchlistPanel watchlist={watchlist} onSelectSymbol={(symbol) => selectCoin(symbol, "watchlist")} />
-        )}
+          {tab === "trades" && <TradesPanel trades={trades} />}
 
-        {tab === "trades" && <TradesPanel trades={trades} />}
+          {tab === "strategies" && <StrategiesPanel />}
 
-        {tab === "longterm" && (
-          <LongTermPanel onSelectSymbol={(symbol) => selectCoin(symbol, "longterm")} watchlist={watchlist} />
-        )}
-
-        {tab === "analysis" && (
-          <>
-            <button type="button" onClick={goBack} className="self-start text-[13px] text-dim hover:text-ink">
-              ← Back to {NAV_TABS.find((t) => t.key === returnTab)?.label.toLowerCase() ?? "scan"}
-            </button>
-            <CoinAnalysis symbol={coin} onSymbolChange={(symbol) => navigate({ coin: symbol })} watchlist={watchlist} />
-          </>
-        )}
+          {tab === "analysis" && (
+            <>
+              <button type="button" onClick={goBack} className="self-start text-[13px] text-dim hover:text-ink">
+                ← Back to {NAV_TABS.find((t) => t.key === returnTab)?.label.toLowerCase() ?? "market"}
+              </button>
+              <CoinAnalysis symbol={coin} onSymbolChange={(symbol) => navigate({ coin: symbol })} watchlist={watchlist} />
+            </>
+          )}
+        </Suspense>
       </main>
     </div>
   );

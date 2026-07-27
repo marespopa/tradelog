@@ -10,14 +10,63 @@ export const TIMEFRAMES = Object.keys(BAR_MAP);
 // this instead of firing its own unbounded Promise.all, so concurrent scans
 // don't stack past the limit and start failing with 429s.
 const RATE_LIMIT_BATCH_SIZE = 10;
+// Small gap between batches so a burst of RATE_LIMIT_BATCH_SIZE symbols
+// (each firing multiple sequential requests, e.g. useSetupFinder's 4H/1H/15m
+// per symbol) doesn't itself accumulate past OKX's ~20 req/2s window before
+// the *next* batch even starts — observed empirically: without this, a
+// ~100-symbol scan can trip 429s on a meaningful fraction of symbols even
+// with fetchJson's per-request backoff below.
+const BATCH_GAP_MS = 250;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function scanInBatches(items, fn) {
   const results = [];
   for (let i = 0; i < items.length; i += RATE_LIMIT_BATCH_SIZE) {
     const batch = items.slice(i, i + RATE_LIMIT_BATCH_SIZE);
     results.push(...(await Promise.allSettled(batch.map(fn))));
+    if (i + RATE_LIMIT_BATCH_SIZE < items.length) await sleep(BATCH_GAP_MS);
   }
   return results;
+}
+
+// Every OKX call in this module goes through here so 429 (rate limit) gets
+// one shared retry policy instead of each caller either not handling it or
+// reinventing backoff. Without this, a rate-limited symbol just fails
+// silently inside scanInBatches' Promise.allSettled — dropped from the
+// result set with no visible error, which is how a real burst of 429s turns
+// into a scan tab quietly rendering "No pairs found" instead of a market
+// with nothing setting up. Only retries 429 and a stalled connection (see
+// REQUEST_TIMEOUT_MS below) specifically; other failures (bad symbol,
+// malformed response) fail immediately same as before.
+const REQUEST_TIMEOUT_MS = 15000;
+
+async function fetchJson(url, retries = 3, backoffMs = 500) {
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (res.status === 429 && attempt < retries) {
+        await sleep(backoffMs * 2 ** attempt);
+        continue;
+      }
+      if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
+      return await res.json();
+    } catch (err) {
+      // A connection that opens but never responds (dead wifi/VPN hop) would
+      // otherwise hang this fetch forever — and since scanInBatches awaits a
+      // whole Promise.allSettled batch before starting the next, one stuck
+      // request freezes every batch after it too, which is what turned into
+      // an indefinitely spinning "Scanning the market…".
+      if (err.name === "AbortError" && attempt < retries) {
+        await sleep(backoffMs * 2 ** attempt);
+        continue;
+      }
+      throw err.name === "AbortError" ? new Error(`OKX request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`) : err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 }
 
 export async function fetchCandles(symbol, timeframe, limit = 300) {
@@ -26,9 +75,7 @@ export async function fetchCandles(symbol, timeframe, limit = 300) {
   const instId = `${symbol.toUpperCase()}-USDT`;
   const url = `https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`;
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
-  const json = await res.json();
+  const json = await fetchJson(url);
   if (json.code !== "0") throw new Error(json.msg || "OKX returned an error");
   if (!json.data?.length) throw new Error(`No candle data for ${instId} — check the symbol`);
 
@@ -62,9 +109,7 @@ export async function fetchCandleHistory(symbol, timeframe, totalBars) {
     url.searchParams.set("bar", bar);
     url.searchParams.set("limit", "100");
     if (after) url.searchParams.set("after", after);
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
-    const json = await res.json();
+    const json = await fetchJson(url);
     if (json.code !== "0") throw new Error(json.msg || "OKX returned an error");
     if (!json.data?.length) break;
     all.push(...json.data);
@@ -101,9 +146,7 @@ export async function fetchFundingRateHistory(symbol, totalPeriods) {
     url.searchParams.set("instId", instId);
     url.searchParams.set("limit", "100");
     if (after) url.searchParams.set("after", after);
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
-    const json = await res.json();
+    const json = await fetchJson(url);
     if (json.code !== "0") throw new Error(json.msg || "OKX returned an error");
     if (!json.data?.length) break;
     all.push(...json.data);
@@ -121,9 +164,7 @@ export async function fetchFundingRateHistory(symbol, totalPeriods) {
 export async function fetchFundingRate(symbol) {
   const instId = `${symbol.toUpperCase()}-USDT-SWAP`;
   const url = `https://www.okx.com/api/v5/public/funding-rate?instId=${instId}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
-  const json = await res.json();
+  const json = await fetchJson(url);
   if (json.code !== "0" || !json.data?.length) throw new Error(json.msg || `No funding rate for ${instId}`);
   const d = json.data[0];
   return { rate: Number(d.fundingRate), nextTime: Number(d.nextFundingTime) };
@@ -132,9 +173,7 @@ export async function fetchFundingRate(symbol) {
 // Latest traded price for one symbol — used for Portfolio USD valuation.
 export async function fetchTickerPrice(symbol) {
   const url = `https://www.okx.com/api/v5/market/ticker?instId=${symbol.toUpperCase()}-USDT`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
-  const json = await res.json();
+  const json = await fetchJson(url);
   if (json.code !== "0" || !json.data?.length) throw new Error(json.msg || `No price for ${symbol}`);
   return Number(json.data[0].last);
 }
@@ -145,9 +184,7 @@ export async function fetchTickerPrice(symbol) {
 // thin liquidity makes a wide stop/target harder to fill without slippage.
 export async function fetchTicker24h(symbol) {
   const url = `https://www.okx.com/api/v5/market/ticker?instId=${symbol.toUpperCase()}-USDT`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
-  const json = await res.json();
+  const json = await fetchJson(url);
   if (json.code !== "0" || !json.data?.length) throw new Error(json.msg || `No ticker for ${symbol}`);
   const t = json.data[0];
   return {
@@ -167,9 +204,7 @@ const STABLECOIN_SYMBOLS = new Set(["USDC", "USDT", "DAI", "TUSD", "USDP", "FDUS
 // can offer neutral sort/filter by those, not just by the analysis stats.
 export async function fetchTopVolumeTickers(limit = 20) {
   const url = "https://www.okx.com/api/v5/market/tickers?instType=SPOT";
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
-  const json = await res.json();
+  const json = await fetchJson(url);
   if (json.code !== "0") throw new Error(json.msg || "OKX returned an error");
 
   return json.data
@@ -194,9 +229,7 @@ export async function fetchTopVolumeTickers(limit = 20) {
 // endpoints above.
 export async function fetchPerpetualSwapSymbols() {
   const url = "https://www.okx.com/api/v5/public/instruments?instType=SWAP";
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
-  const json = await res.json();
+  const json = await fetchJson(url);
   if (json.code !== "0") throw new Error(json.msg || "OKX returned an error");
   return new Set(
     json.data.filter((i) => i.instId.endsWith("-USDT-SWAP")).map((i) => i.instId.replace("-USDT-SWAP", ""))

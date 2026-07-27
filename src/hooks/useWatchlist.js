@@ -41,5 +41,10 @@ export function useWatchlist() {
     setSymbols((s) => (s.includes(symbol) ? s.filter((sym) => sym !== symbol) : [...s, symbol]));
   }, []);
 
-  return { symbols, has, remove, toggle };
+  // Lets the Watchlist panel persist a manually dragged/reordered symbol list.
+  const setOrder = useCallback((newSymbols) => {
+    setSymbols(newSymbols);
+  }, []);
+
+  return { symbols, has, remove, toggle, setOrder };
 }

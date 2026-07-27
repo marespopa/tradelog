@@ -2,20 +2,26 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Bloomberg-terminal style, light pastel variant: same amber-accent,
+   flat-panel-with-thin-dividers language as .dark below, just carried
+   over to a warm cream substrate instead of true black. Body text is
+   dark brown rather than amber (amber-on-white fails contrast), but
+   accents, borders and warn/dim tones stay in the amber/gold family so
+   the two themes read as the same design, not two different apps. */
 :root {
-  --c-bg: #f7f5fb;
+  --c-bg: #faf3e6;
   --c-panel: #ffffff;
-  --c-panel-alt: rgba(124, 111, 224, 0.06);
-  --c-panel-raised: #ffffff;
-  --c-border: rgba(44, 32, 86, 0.1);
-  --c-border-soft: rgba(44, 32, 86, 0.05);
-  --c-text: #2c2a3a;
-  --c-dim: #6f6c82;
-  --c-long: #1f9d6b;
-  --c-short: #d9534f;
-  --c-accent: #7c6fe0;
-  --c-warn: #b8701f;
-  --c-shadow: 0 8px 30px rgba(90, 70, 160, 0.08);
+  --c-panel-alt: rgba(196, 130, 20, 0.07);
+  --c-panel-raised: #fff6e6;
+  --c-border: rgba(180, 120, 20, 0.22);
+  --c-border-soft: rgba(180, 120, 20, 0.1);
+  --c-text: #33270f;
+  --c-dim: #8a6d3f;
+  --c-long: #157a4d;
+  --c-short: #c23b34;
+  --c-accent: #b3690a;
+  --c-warn: #a6790a;
+  --c-shadow: 0 0 0 1px rgba(180, 120, 20, 0.08), 0 8px 24px rgba(120, 80, 20, 0.08);
 
   /* Fixed categorical order for per-asset charts — assigned by asset
      identity (native ETH, then ARBITRUM_TOKENS order), never by rank, so a

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchCandles, fetchTopVolumeTickers, fetchPerpetualSwapSymbols, isShortable, scanInBatches } from "../lib/analysis/okx.js";
-import { analyzeCandles } from "../lib/analysis/ta.js";
-import { find4hTrigger } from "../lib/analysis/mtfSetup.js";
+import { analyzeCandles, changeOverBars } from "../lib/analysis/ta.js";
+import { find4hTrigger, hourlyTrend, MTF_HOURLY_WARMUP_BARS } from "../lib/analysis/mtfSetup.js";
 
 // Scans the top-volume symbols on 4H structure (the swing-trade horizon this
 // scan targets) and returns whichever analyses succeeded — one bad/missing
@@ -29,10 +29,21 @@ export function useSetupFinder(limit = 100, enabled = true) {
       const [tickers, perpSymbols] = await Promise.all([fetchTopVolumeTickers(limit), fetchPerpetualSwapSymbols()]);
       const results = await scanInBatches(tickers, async (ticker) => {
         const candles = await fetchCandles(ticker.symbol, "4h", 220);
+        // Sequential (not Promise.all'd with the 4H fetch above) so each
+        // scanned symbol still has only one request in flight at a time —
+        // scanInBatches' own batching is what keeps total concurrency under
+        // OKX's rate limit, and firing these two in parallel per symbol
+        // would triple that concurrent count.
+        const hourlyCandles = await fetchCandles(ticker.symbol, "1h", MTF_HOURLY_WARMUP_BARS);
+        const fifteenMinCandles = await fetchCandles(ticker.symbol, "15m", 2);
         const fourHTrigger = find4hTrigger(candles, "bullish") ?? find4hTrigger(candles, "bearish");
         return {
           ...analyzeCandles(candles, ticker.symbol),
           changePct24h: ticker.changePct24h,
+          changePct4h: changeOverBars(candles.map((c) => c.close), 1),
+          changePct1h: changeOverBars(hourlyCandles.map((c) => c.close), 1),
+          changePct15m: changeOverBars(fifteenMinCandles.map((c) => c.close), 1),
+          hourlyTrend: hourlyTrend(hourlyCandles),
           fourHTrigger,
           shortable: isShortable(ticker.symbol, perpSymbols),
         };

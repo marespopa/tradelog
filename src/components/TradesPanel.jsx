@@ -1,19 +1,24 @@
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import DataTable from "./DataTable.jsx";
-import { buildTradeColumns } from "../lib/tradeColumns.jsx";
+import { buildTradeColumns, renderTradeDetails } from "../lib/tradeColumns.jsx";
 import { useLivePrices } from "../hooks/useLivePrices.js";
 import { useEntryRiskCheck } from "../hooks/useEntryRiskCheck.js";
-import { fmtDurationExact, fmtPrice, fmtRiskReward } from "../lib/format.js";
+import { useTradingRules } from "../hooks/useTradingRules.js";
+import { fmtDurationExact, fmtPrice, fmtRiskReward, fmtUsd } from "../lib/format.js";
 import { parseOkxOrder } from "../lib/okxOrder.js";
+import { computeSuggestedSize } from "../lib/tradeChecklist.js";
 
 // "YYYY-MM-DDTHH:mm" in the viewer's *local* time, for pre-filling a
 // datetime-local input's value with "now" — datetime-local expects local
 // wall-clock time, not UTC, so Date#toISOString() alone would show the
 // wrong hour off by the timezone offset.
+function toDatetimeLocal(date) {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
 function nowForDatetimeLocal() {
-  const now = new Date();
-  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  return toDatetimeLocal(new Date());
 }
 
 function leveragedPct(trade) {
@@ -193,6 +198,46 @@ function EntryRiskHelper({ form, riskCheck, onUseSuggested }) {
   );
 }
 
+// Shown only when logging a *new* trade (not editing one already in the
+// journal) — account size / risk % (persisted via useTradingRules) plus the
+// suggested position size they imply. Purely informational, no gating.
+function PositionSizingPanel({ rules, suggestedSize }) {
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-edge bg-panel-alt px-3 py-3 text-[12px]">
+      <h3 className="text-[12px] font-semibold text-ink">Position sizing</h3>
+      <div className="mt-1.5 flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1 text-[11px] text-dim">
+          Account size ($)
+          <input
+            type="number"
+            step="any"
+            min="0"
+            value={rules.accountSize ?? ""}
+            onChange={(e) => rules.update({ accountSize: e.target.value === "" ? null : parseFloat(e.target.value) })}
+            className={`w-28 ${inputClass}`}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-[11px] text-dim">
+          Risk per trade (%)
+          <input
+            type="number"
+            step="any"
+            min="0"
+            value={rules.riskPercent ?? ""}
+            onChange={(e) => rules.update({ riskPercent: e.target.value === "" ? null : parseFloat(e.target.value) })}
+            className={`w-20 ${inputClass}`}
+          />
+        </label>
+      </div>
+      <p className="mt-1.5 text-dim">
+        {suggestedSize
+          ? `Risking ${fmtUsd(suggestedSize.riskAmount)} on this stop → size ~${fmtUsd(suggestedSize.notional)} notional (~${suggestedSize.qty.toFixed(4)} units), margin ~${fmtUsd(suggestedSize.margin)}.`
+          : "Fill in account size, risk %, entry price and stop loss to see a suggested size."}
+      </p>
+    </div>
+  );
+}
+
 const emptyForm = {
   symbol: "",
   side: "long",
@@ -203,17 +248,75 @@ const emptyForm = {
   exitTime: "",
   stopLoss: "",
   targetPrice: "",
-  stillOpen: false,
+  stillOpen: true,
 };
 
-function AddTradeForm({ onAdd }) {
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState(emptyForm);
+// Existing trade -> form shape, for pre-filling the edit dialog with every
+// field (including a still-missing stop loss/target as a blank input, not
+// omitted) so editing is also how you add a stop after the fact.
+function tradeToForm(trade) {
+  return {
+    symbol: trade.symbol ?? "",
+    side: trade.side === "short" ? "short" : "long",
+    entryPrice: trade.entryPrice != null ? String(trade.entryPrice) : "",
+    exitPrice: trade.exitPrice != null ? String(trade.exitPrice) : "",
+    leverage: trade.leverage != null ? String(trade.leverage) : "1",
+    entryTime: trade.entryTime ? toDatetimeLocal(new Date(trade.entryTime)) : nowForDatetimeLocal(),
+    exitTime: trade.exitTime ? toDatetimeLocal(new Date(trade.exitTime)) : nowForDatetimeLocal(),
+    stopLoss: trade.stopLoss != null ? String(trade.stopLoss) : "",
+    targetPrice: trade.targetPrice != null ? String(trade.targetPrice) : "",
+    stillOpen: trade.status === "open",
+  };
+}
+
+// Form shape -> the payload useTrades' add()/update() expect.
+function formToPayload(form) {
+  return {
+    symbol: form.symbol,
+    side: form.side,
+    status: form.stillOpen ? "open" : "closed",
+    entryPrice: form.entryPrice === "" ? null : parseFloat(form.entryPrice),
+    exitPrice: form.exitPrice === "" ? null : parseFloat(form.exitPrice),
+    leverage: form.leverage === "" ? 1 : parseFloat(form.leverage),
+    entryTime: form.entryTime
+      ? new Date(form.entryTime).toISOString()
+      : new Date().toISOString(),
+    exitTime: form.exitTime
+      ? new Date(form.exitTime).toISOString()
+      : new Date().toISOString(),
+    stopLoss: form.stopLoss === "" ? null : parseFloat(form.stopLoss),
+    targetPrice:
+      form.targetPrice === "" ? null : parseFloat(form.targetPrice),
+  };
+}
+
+const inputClass =
+  "rounded-lg border border-edge bg-bg px-3 py-1.5 text-[13px] text-ink outline-none focus:border-accent";
+
+// The full trade form (symbol/side/entry/exit/leverage/stop/target/times),
+// shared by "Add trade" and "Edit trade" — editing is just this same form
+// pre-filled from tradeToForm(), which is also how a stop/target missing at
+// entry time gets filled in later.
+function TradeFormDialog({ title, submitLabel, initialForm, onSubmit, onCancel, showPositionSizing = false }) {
+  const [form, setForm] = useState(initialForm);
   const [pasteText, setPasteText] = useState("");
   const [pasteNotice, setPasteNotice] = useState("");
   const riskCheck = useEntryRiskCheck(form.symbol);
+  const rules = useTradingRules();
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+
+  const entryPriceNum = form.entryPrice === "" ? null : parseFloat(form.entryPrice);
+  const stopLossNum = form.stopLoss === "" ? null : parseFloat(form.stopLoss);
+  const leverageNum = form.leverage === "" ? null : parseFloat(form.leverage);
+
+  const suggestedSize = computeSuggestedSize({
+    accountSize: rules.accountSize,
+    riskPercent: rules.riskPercent,
+    entryPrice: entryPriceNum,
+    stopLoss: stopLossNum,
+    leverage: leverageNum,
+  });
 
   const useSuggestedSetup = (setup, currentPrice) => {
     setForm((f) => ({
@@ -244,252 +347,236 @@ function AddTradeForm({ onAdd }) {
   const submit = (e) => {
     e.preventDefault();
     if (!form.symbol.trim()) return;
-    onAdd({
-      symbol: form.symbol,
-      side: form.side,
-      status: form.stillOpen ? "open" : "closed",
-      entryPrice: form.entryPrice === "" ? null : parseFloat(form.entryPrice),
-      exitPrice: form.exitPrice === "" ? null : parseFloat(form.exitPrice),
-      leverage: form.leverage === "" ? 1 : parseFloat(form.leverage),
-      entryTime: form.entryTime
-        ? new Date(form.entryTime).toISOString()
-        : new Date().toISOString(),
-      exitTime: form.exitTime
-        ? new Date(form.exitTime).toISOString()
-        : new Date().toISOString(),
-      stopLoss: form.stopLoss === "" ? null : parseFloat(form.stopLoss),
-      targetPrice:
-        form.targetPrice === "" ? null : parseFloat(form.targetPrice),
-    });
-    setForm(emptyForm);
-    setPasteText("");
-    setPasteNotice("");
-    setOpen(false);
+    onSubmit(formToPayload(form));
   };
 
-  const trigger = (
-    <button
-      type="button"
-      onClick={() => {
-        // Same "now" default as CloseTradeDialog — visible/editable instead
-        // of a blank field that silently falls back to Date.now() on submit.
-        setForm((f) => ({ ...f, entryTime: nowForDatetimeLocal(), exitTime: nowForDatetimeLocal() }));
-        setOpen(true);
-      }}
-      className="self-start rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:opacity-90"
-    >
-      + Add trade
-    </button>
+  return createPortal(
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
+      <form
+        onSubmit={submit}
+        className="flex max-h-[90vh] w-full max-w-2xl flex-col gap-3 overflow-y-auto rounded-card border border-edge bg-panel p-5 shadow-card"
+      >
+        <h2 className="text-[14px] font-semibold">{title}</h2>
+
+        <label className="flex flex-col gap-1 text-[11px] text-dim">
+          Paste an OKX order ticket (optional)
+          <textarea
+            value={pasteText}
+            onChange={(e) => {
+              setPasteText(e.target.value);
+              setPasteNotice("");
+            }}
+            placeholder={"e.g. Price\n1,855.11 USD\nAmount\n0.053905 ETH\nTP trigger price\n1,921.76 USD\nSL trigger price\n1,821.61 USD"}
+            rows={2}
+            className={`resize-none ${inputClass}`}
+          />
+        </label>
+        <div className="-mt-1 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={fillFromPaste}
+            disabled={!pasteText.trim()}
+            className="rounded-lg border border-edge px-2.5 py-1 text-[12px] font-medium text-ink hover:bg-panel-alt disabled:opacity-40"
+          >
+            Fill from OKX order
+          </button>
+          {pasteNotice && <span className="text-[12px] text-dim">{pasteNotice}</span>}
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-[11px] text-dim">
+            Symbol
+            <input
+              type="text"
+              required
+              value={form.symbol}
+              onChange={set("symbol")}
+              placeholder="e.g. LTC"
+              className={`w-24 uppercase ${inputClass}`}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1 text-[11px] text-dim">
+            Side
+            <div className="flex gap-1 rounded-lg bg-panel-alt p-1">
+              {["long", "short"].map((side) => (
+                <button
+                  key={side}
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, side }))}
+                  className={`rounded-md px-2.5 py-1 text-[12px] font-medium capitalize transition-all duration-150 ${
+                    form.side === side
+                      ? "bg-panel-raised text-ink shadow-sm"
+                      : "text-dim hover:text-ink"
+                  }`}
+                >
+                  {side}
+                </button>
+              ))}
+            </div>
+          </label>
+
+          <label className="flex flex-col gap-1 text-[11px] text-dim">
+            Entry price
+            <input
+              type="number"
+              step="any"
+              value={form.entryPrice}
+              onChange={set("entryPrice")}
+              className={`w-28 ${inputClass}`}
+            />
+          </label>
+
+          {!form.stillOpen && (
+            <label className="flex flex-col gap-1 text-[11px] text-dim">
+              Exit price
+              <input
+                type="number"
+                step="any"
+                value={form.exitPrice}
+                onChange={set("exitPrice")}
+                className={`w-28 ${inputClass}`}
+              />
+            </label>
+          )}
+
+          <label className="flex flex-col gap-1 text-[11px] text-dim">
+            Leverage
+            <input
+              type="number"
+              step="any"
+              min="1"
+              value={form.leverage}
+              onChange={set("leverage")}
+              className={`w-20 ${inputClass}`}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1 text-[11px] text-dim">
+            Stop loss
+            <input
+              type="number"
+              step="any"
+              value={form.stopLoss}
+              onChange={set("stopLoss")}
+              className={`w-28 ${inputClass}`}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1 text-[11px] text-dim">
+            Target price
+            <input
+              type="number"
+              step="any"
+              value={form.targetPrice}
+              onChange={set("targetPrice")}
+              className={`w-28 ${inputClass}`}
+            />
+          </label>
+
+          <div className="flex flex-col gap-1 text-[11px] text-dim">
+            R/R
+            <div className="flex h-[34px] items-center px-1 text-[13px] font-medium text-ink">
+              {fmtRiskReward(
+                form.entryPrice === "" ? null : parseFloat(form.entryPrice),
+                form.stopLoss === "" ? null : parseFloat(form.stopLoss),
+                form.targetPrice === ""
+                  ? null
+                  : parseFloat(form.targetPrice),
+              )}
+            </div>
+          </div>
+        </div>
+
+        <EntryRiskHelper form={form} riskCheck={riskCheck} onUseSuggested={useSuggestedSetup} />
+
+        {showPositionSizing && <PositionSizingPanel rules={rules} suggestedSize={suggestedSize} />}
+
+        <label className="flex w-fit items-center gap-2 text-[13px] text-ink">
+          <input
+            type="checkbox"
+            checked={form.stillOpen}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, stillOpen: e.target.checked }))
+            }
+          />
+          Position still open (no exit yet)
+        </label>
+
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-[11px] text-dim">
+            Entry time
+            <input
+              type="datetime-local"
+              value={form.entryTime}
+              onChange={set("entryTime")}
+              className={inputClass}
+            />
+          </label>
+
+          {!form.stillOpen && (
+            <label className="flex flex-col gap-1 text-[11px] text-dim">
+              Exit time
+              <input
+                type="datetime-local"
+                value={form.exitTime}
+                onChange={set("exitTime")}
+                className={inputClass}
+              />
+            </label>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="submit"
+            className="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {submitLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg px-3 py-1.5 text-[13px] text-dim hover:text-ink"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>,
+    document.body,
   );
+}
 
-  if (!open) return trigger;
+function AddTradeForm({ onAdd }) {
+  const [open, setOpen] = useState(false);
 
-  const inputClass =
-    "rounded-lg border border-edge bg-bg px-3 py-1.5 text-[13px] text-ink outline-none focus:border-accent";
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="self-start rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:opacity-90"
+      >
+        + Add trade
+      </button>
+    );
+  }
 
   return (
-    <>
-      {trigger}
-      {createPortal(
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
-          <form
-            onSubmit={submit}
-            className="flex max-h-[90vh] w-full max-w-2xl flex-col gap-3 overflow-y-auto rounded-card border border-edge bg-panel p-5 shadow-card"
-          >
-            <h2 className="text-[14px] font-semibold">Add trade</h2>
-
-            <label className="flex flex-col gap-1 text-[11px] text-dim">
-              Paste an OKX order ticket (optional)
-              <textarea
-                value={pasteText}
-                onChange={(e) => {
-                  setPasteText(e.target.value);
-                  setPasteNotice("");
-                }}
-                placeholder={"e.g. Price\n1,855.11 USD\nAmount\n0.053905 ETH\nTP trigger price\n1,921.76 USD\nSL trigger price\n1,821.61 USD"}
-                rows={2}
-                className={`resize-none ${inputClass}`}
-              />
-            </label>
-            <div className="-mt-1 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={fillFromPaste}
-                disabled={!pasteText.trim()}
-                className="rounded-lg border border-edge px-2.5 py-1 text-[12px] font-medium text-ink hover:bg-panel-alt disabled:opacity-40"
-              >
-                Fill from OKX order
-              </button>
-              {pasteNotice && <span className="text-[12px] text-dim">{pasteNotice}</span>}
-            </div>
-
-            <div className="flex flex-wrap items-end gap-3">
-              <label className="flex flex-col gap-1 text-[11px] text-dim">
-                Symbol
-                <input
-                  type="text"
-                  required
-                  value={form.symbol}
-                  onChange={set("symbol")}
-                  placeholder="e.g. LTC"
-                  className={`w-24 uppercase ${inputClass}`}
-                />
-              </label>
-
-              <label className="flex flex-col gap-1 text-[11px] text-dim">
-                Side
-                <div className="flex gap-1 rounded-lg bg-panel-alt p-1">
-                  {["long", "short"].map((side) => (
-                    <button
-                      key={side}
-                      type="button"
-                      onClick={() => setForm((f) => ({ ...f, side }))}
-                      className={`rounded-md px-2.5 py-1 text-[12px] font-medium capitalize transition-all duration-150 ${
-                        form.side === side
-                          ? "bg-panel-raised text-ink shadow-sm"
-                          : "text-dim hover:text-ink"
-                      }`}
-                    >
-                      {side}
-                    </button>
-                  ))}
-                </div>
-              </label>
-
-              <label className="flex flex-col gap-1 text-[11px] text-dim">
-                Entry price
-                <input
-                  type="number"
-                  step="any"
-                  value={form.entryPrice}
-                  onChange={set("entryPrice")}
-                  className={`w-28 ${inputClass}`}
-                />
-              </label>
-
-              {!form.stillOpen && (
-                <label className="flex flex-col gap-1 text-[11px] text-dim">
-                  Exit price
-                  <input
-                    type="number"
-                    step="any"
-                    value={form.exitPrice}
-                    onChange={set("exitPrice")}
-                    className={`w-28 ${inputClass}`}
-                  />
-                </label>
-              )}
-
-              <label className="flex flex-col gap-1 text-[11px] text-dim">
-                Leverage
-                <input
-                  type="number"
-                  step="any"
-                  min="1"
-                  value={form.leverage}
-                  onChange={set("leverage")}
-                  className={`w-20 ${inputClass}`}
-                />
-              </label>
-
-              <label className="flex flex-col gap-1 text-[11px] text-dim">
-                Stop loss
-                <input
-                  type="number"
-                  step="any"
-                  value={form.stopLoss}
-                  onChange={set("stopLoss")}
-                  className={`w-28 ${inputClass}`}
-                />
-              </label>
-
-              <label className="flex flex-col gap-1 text-[11px] text-dim">
-                Target price
-                <input
-                  type="number"
-                  step="any"
-                  value={form.targetPrice}
-                  onChange={set("targetPrice")}
-                  className={`w-28 ${inputClass}`}
-                />
-              </label>
-
-              <div className="flex flex-col gap-1 text-[11px] text-dim">
-                R/R
-                <div className="flex h-[34px] items-center px-1 text-[13px] font-medium text-ink">
-                  {fmtRiskReward(
-                    form.entryPrice === "" ? null : parseFloat(form.entryPrice),
-                    form.stopLoss === "" ? null : parseFloat(form.stopLoss),
-                    form.targetPrice === ""
-                      ? null
-                      : parseFloat(form.targetPrice),
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <EntryRiskHelper form={form} riskCheck={riskCheck} onUseSuggested={useSuggestedSetup} />
-
-            <label className="flex w-fit items-center gap-2 text-[13px] text-ink">
-              <input
-                type="checkbox"
-                checked={form.stillOpen}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, stillOpen: e.target.checked }))
-                }
-              />
-              Position still open (no exit yet)
-            </label>
-
-            <div className="flex flex-wrap items-end gap-3">
-              <label className="flex flex-col gap-1 text-[11px] text-dim">
-                Entry time
-                <input
-                  type="datetime-local"
-                  value={form.entryTime}
-                  onChange={set("entryTime")}
-                  className={inputClass}
-                />
-              </label>
-
-              {!form.stillOpen && (
-                <label className="flex flex-col gap-1 text-[11px] text-dim">
-                  Exit time
-                  <input
-                    type="datetime-local"
-                    value={form.exitTime}
-                    onChange={set("exitTime")}
-                    className={inputClass}
-                  />
-                </label>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="submit"
-                className="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:opacity-90"
-              >
-                Save trade
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setForm(emptyForm);
-                  setPasteText("");
-                  setPasteNotice("");
-                  setOpen(false);
-                }}
-                className="rounded-lg px-3 py-1.5 text-[13px] text-dim hover:text-ink"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>,
-        document.body,
-      )}
-    </>
+    <TradeFormDialog
+      title="Add trade"
+      submitLabel="Save trade"
+      // Same "now" default as CloseTradeDialog — visible/editable instead of
+      // a blank field that silently falls back to Date.now() on submit.
+      initialForm={{ ...emptyForm, entryTime: nowForDatetimeLocal(), exitTime: nowForDatetimeLocal() }}
+      onSubmit={(payload) => {
+        onAdd(payload);
+        setOpen(false);
+      }}
+      onCancel={() => setOpen(false)}
+      showPositionSizing
+    />
   );
 }
 
@@ -517,9 +604,6 @@ function CloseTradeDialog({ trade, onClose, onCancel }) {
         : new Date().toISOString(),
     });
   };
-
-  const inputClass =
-    "rounded-lg border border-edge bg-bg px-3 py-1.5 text-[13px] text-ink outline-none focus:border-accent";
 
   return createPortal(
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
@@ -597,8 +681,10 @@ function CloseTradeDialog({ trade, onClose, onCancel }) {
 
 export default function TradesPanel({ trades }) {
   const [closingId, setClosingId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
   const closingTrade = trades.trades.find((t) => t.id === closingId) ?? null;
-  const columns = buildTradeColumns(trades.remove, setClosingId);
+  const editingTrade = trades.trades.find((t) => t.id === editingId) ?? null;
+  const columns = buildTradeColumns(trades.remove, setClosingId, setEditingId);
 
   const symbols = useMemo(() => [...new Set(trades.trades.map((t) => t.symbol))], [trades.trades]);
   const { data: livePrices } = useLivePrices(symbols);
@@ -625,6 +711,19 @@ export default function TradesPanel({ trades }) {
         />
       )}
 
+      {editingTrade && (
+        <TradeFormDialog
+          title={`Edit ${editingTrade.symbol}`}
+          submitLabel="Save changes"
+          initialForm={tradeToForm(editingTrade)}
+          onSubmit={(payload) => {
+            trades.update(editingTrade.id, payload);
+            setEditingId(null);
+          }}
+          onCancel={() => setEditingId(null)}
+        />
+      )}
+
       <div className="rounded-card border border-edge bg-panel shadow-card">
         <div className="border-b border-edge px-5 py-3.5">
           <h2 className="text-[14px] font-semibold">Trade History</h2>
@@ -638,6 +737,7 @@ export default function TradesPanel({ trades }) {
           pageSize={20}
           initialSort={{ key: "exitTime", dir: -1 }}
           exportFilename={`trades-${new Date().toISOString().slice(0, 10)}.csv`}
+          renderExpanded={renderTradeDetails}
         />
       </div>
     </div>

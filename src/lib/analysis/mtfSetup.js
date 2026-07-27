@@ -25,6 +25,13 @@ const WEEKLY_EMA_FAST = 10;
 const WEEKLY_EMA_SLOW = 20;
 const DAILY_EMA_FAST = 20;
 const DAILY_EMA_SLOW = 50;
+// Same EMA20/50 cross as the daily tier, just at 1H granularity — a genuine
+// trend read (not a hand-me-down from the 4H/Daily tiers) for the Market
+// table's "1h" column. 150 bars (~6.25 days) so EMA50 has roughly 3x its
+// period to settle, matching the settling ratio used for weekly/daily above.
+const HOURLY_EMA_FAST = 20;
+const HOURLY_EMA_SLOW = 50;
+export const MTF_HOURLY_WARMUP_BARS = 150;
 
 function emaCross(closes, fastPeriod, slowPeriod) {
   if (closes.length < slowPeriod) return null;
@@ -44,6 +51,13 @@ export function weeklyBias(weeklyCandles) {
 // direction so the live hook can display it even when it disagrees.
 export function dailyTrend(dailyCandles) {
   return emaCross(dailyCandles.map((c) => c.close), DAILY_EMA_FAST, DAILY_EMA_SLOW);
+}
+
+// Short-horizon trend read for the Market table's "1h" column — independent
+// of the 3-tier Weekly/Daily/4H setup itself (not used in attachEntry's
+// agreement check), purely a display annotation.
+export function hourlyTrend(hourlyCandles) {
+  return emaCross(hourlyCandles.map((c) => c.close), HOURLY_EMA_FAST, HOURLY_EMA_SLOW);
 }
 
 // Weekly+Daily regime from a single daily candle series (resamples weekly
@@ -125,9 +139,9 @@ export function buildMtfTrade(weeklyCandles, dailyCandles, fourHCandles, rMultip
 // `shortable`, both direction-agnostic/symbol-level facts) against its
 // matching useMarketBias entry (`{ weeklyBias, dailyTrend }` or undefined if
 // the bias hook hasn't resolved that symbol yet) into the shape
-// scanColumns.jsx renders. Shared by ScanPanel, MarketPanel, and
-// WatchlistPanel so all three tables apply the exact same 3-tier-agreement
-// rule rather than each re-deriving it. A bearish (short) signal is vetoed
+// scanColumns.jsx renders. Shared by MarketPanel and WatchlistPanel so both
+// tables apply the exact same 3-tier-agreement rule rather than each
+// re-deriving it. A bearish (short) signal is vetoed
 // when the symbol isn't shortable on OKX (spot has no short mechanism at
 // all — see okx.js's isShortable) since that's not a trade the user can
 // actually place, no matter how well the setup otherwise lines up.
@@ -139,5 +153,5 @@ export function attachEntry(row, bias) {
   const triggered = aligned && trigger && trigger.direction === weekly;
   const shortBlocked = triggered && weekly === "bearish" && !row.shortable;
   const mtfTrade = triggered && !shortBlocked ? buildTrade(trigger, MTF_R_MULTIPLE) : null;
-  return { ...row, weeklyBias: weekly, dailyTrend: daily, mtfTrade };
+  return { ...row, weeklyBias: weekly, dailyTrend: daily, changePct1w: bias?.changePct1w ?? null, mtfTrade };
 }
