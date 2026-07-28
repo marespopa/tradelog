@@ -196,7 +196,7 @@ export async function fetchTicker24h(symbol) {
 // Stablecoins pegged near $1 produce meaningless trend/RSI/score noise —
 // excluded from the scan rather than evaluated as if they were a directional
 // setup.
-const STABLECOIN_SYMBOLS = new Set(["USDC", "USDT", "DAI", "TUSD", "USDP", "FDUSD", "PYUSD", "USDE", "GUSD", "EURC"]);
+const STABLECOIN_SYMBOLS = new Set(["USDC", "USDT", "DAI", "TUSD", "USDP", "FDUSD", "PYUSD", "USDE", "GUSD", "EURC", "RLUSD"]);
 
 // Top-volume USDT spot pairs, for the Setup Finder scan — avoids hardcoding a
 // symbol list by asking OKX for whatever's actually liquid right now. Returns

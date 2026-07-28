@@ -117,6 +117,30 @@ function downloadCsv(filename, columns, rows) {
   URL.revokeObjectURL(url);
 }
 
+// Module-level (outside React state) so it survives the table's own
+// unmount/remount — e.g. navigating Market -> CoinAnalysis -> back to
+// Market unmounts MarketPanel's DataTable entirely (App.jsx only renders
+// the active tab), which would otherwise reset sort/filter/page every time.
+// Keyed by the caller-supplied `stateKey`; tables that don't pass one keep
+// the old behavior (fresh state each mount).
+const tableStateStore = new Map();
+
+function useTableState(stateKey, initialSort, initialPageSize) {
+  const saved = stateKey ? tableStateStore.get(stateKey) : undefined;
+  const [filters, setFilters] = useState(saved?.filters ?? {});
+  const [sort, setSort] = useState(saved?.sort ?? initialSort ?? { key: null, dir: 1 });
+  const [page, setPage] = useState(saved?.page ?? 1);
+  const [pageSize, setPageSize] = useState(saved?.pageSize ?? initialPageSize);
+  const [expandedIds, setExpandedIds] = useState(() => saved?.expandedIds ?? new Set());
+
+  useEffect(() => {
+    if (!stateKey) return;
+    tableStateStore.set(stateKey, { filters, sort, page, pageSize, expandedIds });
+  }, [stateKey, filters, sort, page, pageSize, expandedIds]);
+
+  return { filters, setFilters, sort, setSort, page, setPage, pageSize, setPageSize, expandedIds, setExpandedIds };
+}
+
 function TableMenu({ onExport }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -166,12 +190,15 @@ function TableMenu({ onExport }) {
 // `onReorder(newRowsInFullOrder)`, if given, adds up/down move buttons that let the user
 // drag the row's position; only enabled while unsorted and unfiltered, since that's the
 // only state where on-screen order matches the underlying data order being reordered.
-export default function DataTable({ columns, data, initialSort, emptyText = "No results", pageSize: initialPageSize = 20, onRowClick, exportFilename, renderExpanded, onReorder }) {
-  const [filters, setFilters] = useState({});
-  const [sort, setSort] = useState(initialSort ?? { key: null, dir: 1 });
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(initialPageSize);
-  const [expandedIds, setExpandedIds] = useState(() => new Set());
+// `stateKey`, if given, persists sort/filter/page/expanded-rows across unmounts (see
+// useTableState) so navigating away (e.g. to a coin's analysis view) and back doesn't
+// reset the table. Must be unique per distinct table on the page.
+export default function DataTable({ columns, data, initialSort, emptyText = "No results", pageSize: initialPageSize = 20, onRowClick, exportFilename, renderExpanded, onReorder, stateKey }) {
+  const { filters, setFilters, sort, setSort, page, setPage, pageSize, setPageSize, expandedIds, setExpandedIds } = useTableState(
+    stateKey,
+    initialSort,
+    initialPageSize
+  );
 
   const visibleColumns = useMemo(() => columns.filter((c) => !c.hidden), [columns]);
 

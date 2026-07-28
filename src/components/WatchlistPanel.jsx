@@ -83,6 +83,7 @@ export default function WatchlistPanel({ watchlist, onSelectSymbol }) {
           exportFilename={`watchlist-${new Date().toISOString().slice(0, 10)}.csv`}
           renderExpanded={renderScanDetails}
           onReorder={handleReorder}
+          stateKey="watchlist"
         />
       )}
     </div>

@@ -1,5 +1,5 @@
 import WatchButton from "../components/WatchButton.jsx";
-import { tfClass, tfArrow } from "./scanColumns.jsx";
+import { tfClass } from "./scanColumns.jsx";
 import { fmt } from "./format.js";
 
 // Combined Weekly+Daily trend badge — same shape as scanColumns.jsx's
@@ -7,8 +7,8 @@ import { fmt } from "./format.js";
 function TrendBadge({ weekly, daily }) {
   return (
     <span className="flex items-center gap-2.5 text-[12px] font-medium">
-      <span className={tfClass(weekly)}>W {tfArrow(weekly)}</span>
-      <span className={tfClass(daily)}>D {tfArrow(daily)}</span>
+      <span className={tfClass(weekly)}>W</span>
+      <span className={tfClass(daily)}>D</span>
     </span>
   );
 }
@@ -24,7 +24,7 @@ function AlphaBadge({ value }) {
 }
 
 // Long-term hold candidate table — same badge/column conventions as
-// scanColumns.jsx (tfClass/tfArrow, watch-star unshift) so this reads as the
+// scanColumns.jsx (tfClass, watch-star unshift) so this reads as the
 // same family of table rather than a one-off. Alpha (vs BTC, daily-bar window)
 // is the primary sort key since it's the "why this instead of just holding
 // BTC" number; Weekly/Daily are shown for trust even though every row here

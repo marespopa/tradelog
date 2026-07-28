@@ -27,22 +27,15 @@ export function tfClass(bias) {
   return bias === "bullish" ? "text-position-long" : bias === "bearish" ? "text-position-short" : "text-dim";
 }
 
-export function tfArrow(bias) {
-  return bias === "bullish" ? "▲" : bias === "bearish" ? "▼" : "–";
-}
+const TREND_LABELS = { bullish: "Bullish", bearish: "Bearish", sideways: "Sideways" };
 
-// Growth % + that same timeframe's own EMA-cross trend arrow in one cell —
-// folded together instead of a separate Weekly/Daily/4H "Trend" column, so
-// each of the 1h/4h/1d/1w columns carries both the move and its direction
-// read rather than spending a whole column on direction alone.
-function TrendGrowthBadge({ trend, pct }) {
-  if (pct == null) return "—";
-  return (
-    <span className={`tabular-nums ${tfClass(trend)}`}>
-      {tfArrow(trend)} {pct >= 0 ? "+" : ""}
-      {pct.toFixed(1)}%
-    </span>
-  );
+// Combined 4H+Daily+Weekly read (see mtfSetup.js's overallTrend) as one
+// plain-English label instead of making the reader cross-reference the
+// three separate per-timeframe badges below to figure out whether they
+// actually agree.
+function OverallTrendBadge({ trend }) {
+  if (trend == null) return "—";
+  return <span className={`font-medium ${tfClass(trend)}`}>{TREND_LABELS[trend]}</span>;
 }
 
 // The live 3-tier entry: only set when Weekly bias, Daily trend, and the 4H
@@ -108,13 +101,20 @@ export function buildScanColumns(watchlist, { excludeKeys = [], showKeys = [] } 
       sortValue: (r) => r.mtfTrade?.rr ?? 0,
       formatter: (r) => (r.mtfTrade ? `1:${r.mtfTrade.rr}` : "—"),
     },
+    {
+      key: "trendRead",
+      title: "Trend",
+      sortValue: (r) => (r.trendRead === "bullish" ? 1 : r.trendRead === "bearish" ? -1 : 0),
+      csvValue: (r) => TREND_LABELS[r.trendRead] ?? "—",
+      formatter: (r) => <OverallTrendBadge trend={r.trendRead} />,
+    },
     { key: "current", title: "Price", align: "right", sortValue: (r) => r.current ?? 0, formatter: (r) => fmt(r.current) },
     // Growth split per timeframe (each independently sortable) instead of a
-    // single 24h figure. 1h/4h/1d/1w also carry that same timeframe's own
-    // EMA-cross trend arrow (see TrendGrowthBadge) instead of spending a
-    // separate column on Weekly/Daily/4H direction alone. 15m has no EMA
-    // trend behind it (only 2 candles are fetched for it) so it stays a
-    // plain %.
+    // single 24h figure. Each cell is colored only by its own sign (green
+    // up / red down, via PctBadge) — a per-cell trend arrow/tint used to
+    // ride along too, but that colored a coin up 15% in a "bearish" EMA
+    // trend as red, which read as a bug. See the combined Trend column
+    // above for the actual multi-timeframe direction read.
     {
       key: "changePct15m",
       title: "15m",
@@ -127,32 +127,28 @@ export function buildScanColumns(watchlist, { excludeKeys = [], showKeys = [] } 
       title: "1h",
       align: "right",
       sortValue: (r) => r.changePct1h ?? 0,
-      csvValue: (r) => `${r.hourlyTrend ?? "–"} ${r.changePct1h != null ? r.changePct1h.toFixed(1) + "%" : "—"}`,
-      formatter: (r) => <TrendGrowthBadge trend={r.hourlyTrend} pct={r.changePct1h} />,
+      formatter: (r) => <PctBadge value={r.changePct1h} />,
     },
     {
       key: "changePct4h",
       title: "4h",
       align: "right",
       sortValue: (r) => r.changePct4h ?? 0,
-      csvValue: (r) => `${r.trend ?? "–"} ${r.changePct4h != null ? r.changePct4h.toFixed(1) + "%" : "—"}`,
-      formatter: (r) => <TrendGrowthBadge trend={r.trend} pct={r.changePct4h} />,
+      formatter: (r) => <PctBadge value={r.changePct4h} />,
     },
     {
       key: "changePct24h",
       title: "1d",
       align: "right",
       sortValue: (r) => r.changePct24h ?? 0,
-      csvValue: (r) => `${r.dailyTrend ?? "–"} ${r.changePct24h != null ? r.changePct24h.toFixed(1) + "%" : "—"}`,
-      formatter: (r) => <TrendGrowthBadge trend={r.dailyTrend} pct={r.changePct24h} />,
+      formatter: (r) => <PctBadge value={r.changePct24h} />,
     },
     {
       key: "changePct1w",
       title: "1w",
       align: "right",
       sortValue: (r) => r.changePct1w ?? 0,
-      csvValue: (r) => `${r.weeklyBias ?? "–"} ${r.changePct1w != null ? r.changePct1w.toFixed(1) + "%" : "—"}`,
-      formatter: (r) => <TrendGrowthBadge trend={r.weeklyBias} pct={r.changePct1w} />,
+      formatter: (r) => <PctBadge value={r.changePct1w} />,
     },
     // 4H fair-value gap — kept visible (not folded into the expanded row
     // with the other secondary stats below) since it's the most-watched

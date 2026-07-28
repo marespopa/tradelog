@@ -499,15 +499,12 @@ function StrategyResult({ result }) {
 }
 
 const SIGNAL_LABEL = {
-  long: { text: "LONG", detail: "your code says go long", tone: "up" },
-  short: { text: "SHORT", detail: "your code says go short", tone: "down" },
-  close: { text: "CLOSE", detail: "your code says exit the open position", tone: "neutral" },
+  long: { text: "LONG", tone: "up" },
+  short: { text: "SHORT", tone: "down" },
+  close: { text: "CLOSE", tone: "neutral" },
 };
 
-// Literal output of the user's own function on the latest closed bar — not
-// a recommendation. Framed as "your rule says X", and explicitly reminds
-// that a signal reading says nothing about whether the rule is any good;
-// only the backtest above answers that.
+// Literal output of the user's own function on the latest closed bar.
 function SignalResult({ result }) {
   if (!result) return null;
 
@@ -531,16 +528,14 @@ function SignalResult({ result }) {
       </span>
       <span className="text-dim">
         {" "}
-        — {label ? label.detail : "your code returned nothing on this bar (hold / stay flat)"}. As of the last closed bar,{" "}
-        {fmtDateTime(bar.time)} @ {fmtPrice(bar.close)}. This is your rule's raw output, not a recommendation — and it doesn't mean the rule has
-        an edge; check the backtest above for that.
+        @ {fmtPrice(bar.close)} · {fmtDateTime(bar.time)}
+        {stop != null && target != null && (
+          <>
+            {" "}
+            · stop <span className="text-ink">{fmtPrice(stop)}</span> · target <span className="text-ink">{fmtPrice(target)}</span>
+          </>
+        )}
       </span>
-      {stop != null && target != null && (
-        <div className="mt-1 text-dim">
-          Suggested stop <span className="text-ink">{fmtPrice(stop)}</span> · target <span className="text-ink">{fmtPrice(target)}</span> —
-          based on the last closed bar's price, not your actual fill.
-        </div>
-      )}
     </div>
   );
 }

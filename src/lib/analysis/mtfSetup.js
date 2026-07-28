@@ -153,5 +153,29 @@ export function attachEntry(row, bias) {
   const triggered = aligned && trigger && trigger.direction === weekly;
   const shortBlocked = triggered && weekly === "bearish" && !row.shortable;
   const mtfTrade = triggered && !shortBlocked ? buildTrade(trigger, MTF_R_MULTIPLE) : null;
-  return { ...row, weeklyBias: weekly, dailyTrend: daily, changePct1w: bias?.changePct1w ?? null, mtfTrade };
+  return {
+    ...row,
+    weeklyBias: weekly,
+    dailyTrend: daily,
+    changePct1w: bias?.changePct1w ?? null,
+    mtfTrade,
+    trendRead: overallTrend(weekly, daily, row.trend),
+  };
+}
+
+// One-glance read across all three swing-relevant timeframes (4H/Daily/
+// Weekly — the same tiers attachEntry checks for a live entry, minus the
+// trigger timing), for the Market/Watchlist tables' "Trend" column. Distinct
+// from mtfRegime (which is Weekly+Daily only, for the slower-cadence
+// betaNeutral basket build): this folds in the 4H read too since that's the
+// scan's actual trading horizon. "sideways" covers both a genuine flat 4H
+// read (trendFactor's near-zero-separation case — the only one of the three
+// that can produce it) and the three tiers disagreeing with each other:
+// either way there's no single clean direction to hang a read on. Returns
+// null only while a tier hasn't resolved yet (weekly/dailyTrend arrive on
+// useMarketBias's slower cadence and can lag the 4H scan).
+export function overallTrend(weeklyBias, dailyTrend, fourHTrend) {
+  if (weeklyBias == null || dailyTrend == null || fourHTrend == null) return null;
+  if (weeklyBias === dailyTrend && dailyTrend === fourHTrend) return weeklyBias;
+  return "sideways";
 }

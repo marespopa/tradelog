@@ -46,6 +46,7 @@ export default function MarketPanel({ onSelectSymbol, watchlist }) {
           initialSort={{ key: "changePct24h", dir: -1 }}
           exportFilename={`market-${new Date().toISOString().slice(0, 10)}.csv`}
           renderExpanded={renderScanDetails}
+          stateKey="market"
         />
       )}
     </div>
