@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchCandles, fetchTopVolumeTickers, scanInBatches } from "../lib/analysis/okx.js";
+import { fetchCandles, fetchTopVolumeTickers, scanInBatches } from "../lib/analysis/krakenSpot.js";
 import { computeBetaAlpha, computeExtension } from "../lib/analysis/betaNeutral.js";
 import { weeklyBias, dailyTrend } from "../lib/analysis/mtfSetup.js";
 import { buildWeeklyCandles } from "../lib/analysis/timeframes.js";

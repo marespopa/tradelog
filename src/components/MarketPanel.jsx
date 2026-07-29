@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import DataTable from "./DataTable.jsx";
+import RotatingLoadingText from "./RotatingLoadingText.jsx";
 import { useSetupFinder } from "../hooks/useSetupFinder.js";
 import { useMarketBias } from "../hooks/useMarketBias.js";
 import { attachEntry } from "../lib/analysis/mtfSetup.js";
@@ -20,7 +21,7 @@ export default function MarketPanel({ onSelectSymbol, watchlist }) {
   // default otherwise) since spotting volume spikes across the whole
   // universe is exactly what this tab is for.
   const columns = useMemo(
-    () => buildScanColumns(watchlist, { excludeKeys: ["entry", "rr"], showKeys: ["relativeVolume"] }),
+    () => buildScanColumns(watchlist, { excludeKeys: ["entry", "rr"], showKeys: ["relativeVolume", "zScore"] }),
     [watchlist]
   );
 
@@ -40,7 +41,7 @@ export default function MarketPanel({ onSelectSymbol, watchlist }) {
         <DataTable
           columns={columns}
           data={rows}
-          emptyText={isLoading ? "Scanning the market…" : "No pairs found"}
+          emptyText={isLoading ? <RotatingLoadingText /> : "No pairs found"}
           onRowClick={(row) => onSelectSymbol?.(row.symbol)}
           pageSize={20}
           initialSort={{ key: "changePct24h", dir: -1 }}

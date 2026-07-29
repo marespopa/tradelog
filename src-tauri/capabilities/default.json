@@ -8,6 +8,13 @@
   "permissions": [
     "core:default",
     "store:default",
-    "notification:default"
+    "notification:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://api.kraken.com/*" },
+        { "url": "https://futures.kraken.com/*" }
+      ]
+    }
   ]
 }

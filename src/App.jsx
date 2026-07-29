@@ -2,6 +2,8 @@ import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { useTheme } from "./hooks/useTheme.js";
 import { useWatchlist } from "./hooks/useWatchlist.js";
 import { useTrades } from "./hooks/useTrades.js";
+import { useStrategies } from "./hooks/useStrategies.js";
+import { useStrategySignals } from "./hooks/useStrategySignals.js";
 
 const CoinAnalysis = lazy(() => import("./components/CoinAnalysis.jsx"));
 const MarketPanel = lazy(() => import("./components/MarketPanel.jsx"));
@@ -34,6 +36,11 @@ export default function App() {
   const { preference, cycle } = useTheme();
   const watchlist = useWatchlist();
   const trades = useTrades();
+  const strategies = useStrategies();
+  // Owned here (not by StrategiesPanel) so its background poller -- and thus
+  // notifications -- keeps running while any other tab is open, not just
+  // while Strategies itself is mounted (App.jsx only renders the active tab).
+  const strategySignals = useStrategySignals(strategies.strategies);
   const [{ tab, coin }, setUrlState] = useState(readUrlState);
   // Which nav tab to return to from analysis — set whenever a row is
   // clicked from scan or watchlist, so "Back" lands wherever you came from.
@@ -116,7 +123,7 @@ export default function App() {
 
           {tab === "trades" && <TradesPanel trades={trades} />}
 
-          {tab === "strategies" && <StrategiesPanel />}
+          {tab === "strategies" && <StrategiesPanel strategies={strategies} strategySignals={strategySignals} />}
 
           {tab === "analysis" && (
             <>

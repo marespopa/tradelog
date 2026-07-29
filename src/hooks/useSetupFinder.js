@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchCandles, fetchTopVolumeTickers, fetchPerpetualSwapSymbols, isShortable, scanInBatches } from "../lib/analysis/okx.js";
+import { fetchCandles, fetchTopVolumeTickers, scanInBatches } from "../lib/analysis/krakenSpot.js";
+import { fetchPerpetualSwapSymbols, isShortable } from "../lib/analysis/krakenFutures.js";
 import { analyzeCandles, changeOverBars } from "../lib/analysis/ta.js";
 import { find4hTrigger, hourlyTrend, MTF_HOURLY_WARMUP_BARS } from "../lib/analysis/mtfSetup.js";
 
@@ -16,12 +17,12 @@ import { find4hTrigger, hourlyTrend, MTF_HOURLY_WARMUP_BARS } from "../lib/analy
 // slower cadence). Whether that trigger amounts to a live 3-tier entry is
 // decided by the caller, which joins this against useMarketBias by symbol.
 //
-// Also reports shortable: OKX spot has no short mechanism at all — shorting
-// only happens via a symbol's perpetual swap (see okx.js's isShortable).
-// attachEntry() uses this to veto a "short" entry on a spot-only symbol
-// (SATS, for example, ranks fine on trend/trigger but has no -USDT-SWAP
-// listing, so a live short signal on it would be a trade the user can't
-// actually place).
+// Also reports shortable: Kraken spot has no short mechanism at all —
+// shorting only happens via a symbol's Kraken Futures perpetual (see
+// krakenFutures.js's isShortable). attachEntry() uses this to veto a
+// "short" entry on a spot-only symbol — a symbol can rank fine on
+// trend/trigger but have no matching PF_ perpetual listing, so a live short
+// signal on it would be a trade the user can't actually place.
 export function useSetupFinder(limit = 100, enabled = true) {
   return useQuery({
     queryKey: ["setup-finder", limit],
@@ -32,7 +33,7 @@ export function useSetupFinder(limit = 100, enabled = true) {
         // Sequential (not Promise.all'd with the 4H fetch above) so each
         // scanned symbol still has only one request in flight at a time —
         // scanInBatches' own batching is what keeps total concurrency under
-        // OKX's rate limit, and firing these two in parallel per symbol
+        // Kraken's rate limit, and firing these two in parallel per symbol
         // would triple that concurrent count.
         const hourlyCandles = await fetchCandles(ticker.symbol, "1h", MTF_HOURLY_WARMUP_BARS);
         const fifteenMinCandles = await fetchCandles(ticker.symbol, "15m", 2);

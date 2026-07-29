@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import PriceChart from "./PriceChart.jsx";
 import WatchButton from "./WatchButton.jsx";
 import { useCoinAnalysis } from "../hooks/useCoinAnalysis.js";
-import { TIMEFRAMES } from "../lib/analysis/okx.js";
+import { TIMEFRAMES } from "../lib/analysis/krakenSpot.js";
 import { linearRegressionChannel } from "../lib/analysis/ta.js";
 import { detectChartPattern } from "../lib/analysis/chartPatterns.js";
 import { fmtPrice } from "../lib/format.js";

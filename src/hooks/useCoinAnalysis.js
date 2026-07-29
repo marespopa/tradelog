@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchCandles, fetchTicker24h } from "../lib/analysis/okx.js";
+import { fetchCandles, fetchTicker24h } from "../lib/analysis/krakenSpot.js";
 import { analyzeCandles } from "../lib/analysis/ta.js";
 
 export function useCoinAnalysis(symbol, timeframe) {

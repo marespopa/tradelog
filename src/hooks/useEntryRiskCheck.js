@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchCandles } from "../lib/analysis/okx.js";
+import { fetchCandles } from "../lib/analysis/krakenSpot.js";
 import { analyzeCandles, buildSetup } from "../lib/analysis/ta.js";
 import { computeBetaAlpha } from "../lib/analysis/betaNeutral.js";
 

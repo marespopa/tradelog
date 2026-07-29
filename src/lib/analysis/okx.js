@@ -1,6 +1,8 @@
 // Public OKX market data — no API key needed, fetched straight from the
 // browser (same no-backend approach used elsewhere in this app; OKX's public
 // REST endpoints allow CORS for market data).
+import { scanInBatches as scanInBatchesGeneric, createFetchJson } from "./httpBatch.js";
+
 const BAR_MAP = { "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "1w": "1W" };
 export const TIMEFRAMES = Object.keys(BAR_MAP);
 
@@ -17,16 +19,9 @@ const RATE_LIMIT_BATCH_SIZE = 10;
 // ~100-symbol scan can trip 429s on a meaningful fraction of symbols even
 // with fetchJson's per-request backoff below.
 const BATCH_GAP_MS = 250;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function scanInBatches(items, fn) {
-  const results = [];
-  for (let i = 0; i < items.length; i += RATE_LIMIT_BATCH_SIZE) {
-    const batch = items.slice(i, i + RATE_LIMIT_BATCH_SIZE);
-    results.push(...(await Promise.allSettled(batch.map(fn))));
-    if (i + RATE_LIMIT_BATCH_SIZE < items.length) await sleep(BATCH_GAP_MS);
-  }
-  return results;
+export function scanInBatches(items, fn) {
+  return scanInBatchesGeneric(items, fn, { batchSize: RATE_LIMIT_BATCH_SIZE, gapMs: BATCH_GAP_MS });
 }
 
 // Every OKX call in this module goes through here so 429 (rate limit) gets
@@ -35,39 +30,14 @@ export async function scanInBatches(items, fn) {
 // silently inside scanInBatches' Promise.allSettled — dropped from the
 // result set with no visible error, which is how a real burst of 429s turns
 // into a scan tab quietly rendering "No pairs found" instead of a market
-// with nothing setting up. Only retries 429 and a stalled connection (see
-// REQUEST_TIMEOUT_MS below) specifically; other failures (bad symbol,
-// malformed response) fail immediately same as before.
-const REQUEST_TIMEOUT_MS = 15000;
-
-async function fetchJson(url, retries = 3, backoffMs = 500) {
-  for (let attempt = 0; ; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    try {
-      const res = await fetch(url, { signal: controller.signal });
-      if (res.status === 429 && attempt < retries) {
-        await sleep(backoffMs * 2 ** attempt);
-        continue;
-      }
-      if (!res.ok) throw new Error(`OKX request failed: ${res.status}`);
-      return await res.json();
-    } catch (err) {
-      // A connection that opens but never responds (dead wifi/VPN hop) would
-      // otherwise hang this fetch forever — and since scanInBatches awaits a
-      // whole Promise.allSettled batch before starting the next, one stuck
-      // request freezes every batch after it too, which is what turned into
-      // an indefinitely spinning "Scanning the market…".
-      if (err.name === "AbortError" && attempt < retries) {
-        await sleep(backoffMs * 2 ** attempt);
-        continue;
-      }
-      throw err.name === "AbortError" ? new Error(`OKX request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`) : err;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-}
+// with nothing setting up. Only retries 429 and a stalled connection
+// specifically; other failures (bad symbol, malformed response) fail
+// immediately same as before. A connection that opens but never responds
+// (dead wifi/VPN hop) would otherwise hang this fetch forever — and since
+// scanInBatches awaits a whole Promise.allSettled batch before starting the
+// next, one stuck request freezes every batch after it too, which is what
+// turned into an indefinitely spinning "Scanning the market…".
+const fetchJson = createFetchJson({ source: "OKX" });
 
 export async function fetchCandles(symbol, timeframe, limit = 300) {
   const bar = BAR_MAP[timeframe];

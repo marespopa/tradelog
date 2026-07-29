@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import DataTable from "./DataTable.jsx";
+import RotatingLoadingText from "./RotatingLoadingText.jsx";
 import { useSetupFinder } from "../hooks/useSetupFinder.js";
 import { useMarketBias } from "../hooks/useMarketBias.js";
 import { useLivePrices } from "../hooks/useLivePrices.js";
@@ -70,7 +71,9 @@ export default function WatchlistPanel({ watchlist, onSelectSymbol }) {
           with every row looking dataless during the first scan instead of
           showing that a scan is actually in progress. */}
       {!error && watchlist.symbols.length > 0 && isLoading && (
-        <p className="p-5 text-[13px] text-dim">Scanning the market…</p>
+        <p className="p-5 text-[13px] text-dim">
+          <RotatingLoadingText />
+        </p>
       )}
 
       {!error && watchlist.symbols.length > 0 && !isLoading && (

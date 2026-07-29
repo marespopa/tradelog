@@ -8,6 +8,21 @@ export const ROUNDTRIP_FEE_PCT = 0.2;
 
 const TIMEOUT_MS = 15000;
 
+// Shared by runStrategy/runSignalCheck's own "not enough candles" guard
+// (both fetch via getCachedCandles first, then check length before calling
+// into the worker) -- explains *why* a warmup this large is needed and what
+// to actually do about it, instead of just reporting the raw shortfall.
+// warmupBars itself usually isn't arbitrary (e.g. the MTF Swing preset's
+// 2520 is exactly 60 weeks of 4H bars, tied to its weekly EMA20 settling --
+// see MTF_WEEKLY_WARMUP_BARS in mtfSetup.js), so the fix is almost always
+// "pick a symbol OKX has deeper history for," not "lower the warmup."
+export function notEnoughHistoryError(symbol, warmupBars, gotBars) {
+  return new Error(
+    `${symbol} only has ${gotBars} candles of history on OKX, but this strategy needs a ${warmupBars}-bar warmup before it can produce a signal. ` +
+      `That's not enough history for ${symbol} specifically -- try a longer-listed symbol (BTC/ETH/SOL usually have the deepest OKX history), or lower the warmup if you're sure your rule doesn't need this much.`
+  );
+}
+
 // Best-effort: ctx.fearGreed is an optional extra signal, not load-bearing
 // infrastructure like candles — if the index can't be fetched (offline, API
 // hiccup) the strategy still runs, just with every reading null instead of

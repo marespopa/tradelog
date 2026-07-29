@@ -104,6 +104,8 @@ export function buildScanColumns(watchlist, { excludeKeys = [], showKeys = [] } 
     {
       key: "trendRead",
       title: "Trend",
+      filter: "select",
+      filterValue: (r) => TREND_LABELS[r.trendRead] ?? "—",
       sortValue: (r) => (r.trendRead === "bullish" ? 1 : r.trendRead === "bearish" ? -1 : 0),
       csvValue: (r) => TREND_LABELS[r.trendRead] ?? "—",
       formatter: (r) => <OverallTrendBadge trend={r.trendRead} />,

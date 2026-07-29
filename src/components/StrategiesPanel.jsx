@@ -1,68 +1,16 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import DataTable from "./DataTable.jsx";
-import { useStrategies } from "../hooks/useStrategies.js";
-import { useSignalPolling, ensureNotificationPermission, sendTestNotification } from "../hooks/useSignalPolling.js";
+import { ensureNotificationPermission, sendTestNotification } from "../hooks/useSignalPolling.js";
 import { normalizeSignal } from "../lib/strategySignal.js";
 import { TIMEFRAMES } from "../lib/analysis/okx.js";
 import { getCachedCandles } from "../lib/candleCache.js";
-import { runStrategyBacktest, runStrategySignal } from "../lib/strategyEngine.js";
+import { runStrategyBacktest, notEnoughHistoryError } from "../lib/strategyEngine.js";
 import { summarizeTrades, buyHoldPct } from "../lib/backtestStats.js";
 import { fmtDateTime, fmtPrice } from "../lib/format.js";
 
 const TIMEFRAME_LABEL = { "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "1w": "1W" };
 const POLL_MINUTES_OPTIONS = [5, 15, 30, 60];
-
-// Working examples so a new strategy starts from something runnable instead
-// of a blank box. Both are self-contained per bar (no engine-tracked state
-// besides `position`), always-in-market flip systems: every directional
-// signal both opens the new side and closes the old one (see
-// strategyWorker.js), so there's no separate flat state to manage.
-
-// Same channel-midline-flip rule scripts/backtest-channel-midline.js tests
-// standalone, ported to the ctx-based contract (the script's carried
-// "prevBand" variable is instead just re-derived from ctx.bars each call).
-const CHANNEL_MIDLINE_CODE = `// ctx.bars: candles [{time, open, high, low, close, volume}] up to and
-// including "now" -- no lookahead. ctx.position: { direction: "long"|"short",
-// entryIndex, entryPrice } or null if flat. ctx.ta: indicator helpers
-// (linearRegressionChannel, ema, rsi, macd, atr, zScore, findSwingLevels, ...).
-// Return "long", "short", "close", or nothing/null to hold.
-
-const channel = ctx.ta.linearRegressionChannel(ctx.bars, { lookback: 60 });
-if (!channel) return null;
-
-const bar = ctx.bars.at(-1);
-const prevBar = ctx.bars.at(-2);
-if (!prevBar) return null;
-
-const currMid = channel.at(-1).mid;
-const prevMid = channel.at(-2)?.mid ?? currMid;
-
-if (prevBar.close >= prevMid && bar.close < currMid) return "short";
-if (prevBar.close <= prevMid && bar.close > currMid) return "long";
-return null;
-`;
-
-// Pure momentum via MACD's own histogram sign flip (12/26/9 EMA separation)
-// rather than a price-structure rule like the channel above — long on a
-// fresh bullish cross, short on a fresh bearish cross. ctx.ta.macd already
-// exposes bullishCross/bearishCross directly (see ta.js) so this is a
-// straight pass-through of that read, recomputed fresh each bar from
-// ctx.bars (no lookahead — same as the channel preset).
-const PURE_MOMENTUM_CODE = `// ctx.bars: candles [{time, open, high, low, close, volume}] up to and
-// including "now" -- no lookahead. ctx.position: { direction: "long"|"short",
-// entryIndex, entryPrice } or null if flat. ctx.ta: indicator helpers
-// (linearRegressionChannel, ema, rsi, macd, atr, zScore, findSwingLevels, ...).
-// Return "long", "short", "close", or nothing/null to hold.
-
-const closes = ctx.bars.map((b) => b.close);
-const macd = ctx.ta.macd(closes);
-if (!macd) return null;
-
-if (macd.bullishCross) return "long";
-if (macd.bearishCross) return "short";
-return null;
-`;
 
 // Trend-aligned dip/rip entry (EMA20/50 for direction, Bollinger basis +
 // RSI + Fear & Greed for the pullback trigger) with a pure ATR stop/target
@@ -149,6 +97,102 @@ if (isDowntrend && currentClose >= bb.basis && currentRsi > 48 && fgVal > 15) {
 }
 `;
 
+// User-drafted variant of the preset above: wider ATR stop/target (2.0x/3.5x
+// vs 1.5x/2.5x), a looser pullback trigger (RSI<45 OR touch of the lower/
+// upper Bollinger band, vs RSI<52 AND touch of the basis), and -- the part
+// worth being wary of, since an earlier "trend breakdown" exit clause was
+// exactly what got dropped from the preset above for causing 60-70% same-bar
+// exits -- an EMA20/50 dead-cross exit layered on top of the ATR stop/target.
+// Backtested honestly before trusting it (scripts/backtest-trend-dip-v2.js):
+// this dead-cross variant does NOT reproduce that failure mode (only 9-14%
+// of trades closed within 1 bar, vs the ~60-70% the earlier clause had), and
+// trades better risk-adjusted than the original -- lower drawdown/higher
+// Calmar for somewhat less raw return:
+//   BTC 4H: n=24, +17.4% compounded, -6.3% max drawdown, Calmar 4.40
+//   ETH 4H: n=23, +20.9% compounded, -14.4% max drawdown, Calmar 2.35
+//   SOL 4H: n=22, -0.6% compounded, Calmar -0.06 (flat/negative)
+// Same "majors only" pattern as the original -- SOL doesn't work here either.
+// n=22-24 per symbol is a modest sample (wide win-rate CIs), consistent
+// direction across BTC/ETH is what makes this worth keeping, not proof.
+const TREND_DIP_ATR_EXIT_V2_CODE = `// ctx.bars: candles [{time, open, high, low, close, volume}] up to and
+// including "now" -- no lookahead. ctx.position: { direction: "long"|"short",
+// entryIndex, entryPrice } or null if flat. ctx.ta: indicator helpers
+// (ema, rsi, bollingerBands, atr, ...). ctx.fearGreed: aligned Fear & Greed
+// history, ctx.fearGreed.at(-1) is { value, classification, time } or null.
+// Return "long", "short", "close", or nothing/null to hold -- or, on entry,
+// { signal: "long"|"short", stop, target } to also surface a suggested
+// SL/TP in the signal check and its notification.
+// Scoped to majors (BTC/ETH) -- flat/negative on SOL, see chat notes.
+
+const bars = ctx.bars;
+if (bars.length < 60) return;
+
+const closes = bars.map(b => b.close);
+
+const ema20 = ctx.ta.ema(closes, 20);
+const ema50 = ctx.ta.ema(closes, 50);
+const rsi = ctx.ta.rsi(closes, 14);
+const bb = ctx.ta.bollingerBands(closes, 20, 2);
+const atr = ctx.ta.atr(bars, 14);
+
+const currentClose = closes.at(-1);
+const currentEma20 = ema20.at(-1);
+const pastEma20 = ema20.at(-2);
+const currentEma50 = ema50.at(-1);
+const pastEma50 = ema50.at(-2);
+const currentRsi = rsi.at(-1);
+
+if (currentEma20 === null || currentEma50 === null || currentRsi === null || !bb || !atr) {
+  return;
+}
+
+const fg = ctx.fearGreed.at(-1);
+const fgVal = fg ? fg.value : 50;
+
+const pos = ctx.position;
+
+// Exit on ATR stop/target OR an EMA20/50 dead-cross trend reversal --
+// backtested to confirm this doesn't reproduce the same-bar-exit problem an
+// earlier trend-breakdown clause had (see note above).
+if (pos) {
+  const entry = pos.entryPrice;
+
+  if (pos.direction === "long") {
+    const stop = entry - (2.0 * atr);
+    const tp = entry + (3.5 * atr);
+    const trendReversal = currentEma20 < currentEma50 && pastEma20 >= pastEma50;
+    if (trendReversal || currentClose <= stop || currentClose >= tp) {
+      return "close";
+    }
+  } else if (pos.direction === "short") {
+    const stop = entry + (2.0 * atr);
+    const tp = entry - (3.5 * atr);
+    const trendReversal = currentEma20 > currentEma50 && pastEma20 <= pastEma50;
+    if (trendReversal || currentClose >= stop || currentClose <= tp) {
+      return "close";
+    }
+  }
+  return;
+}
+
+const isUptrend = currentEma20 > currentEma50;
+const isDowntrend = currentEma20 < currentEma50;
+
+const isNotExtremeGreed = fgVal < 75;
+const isNotExtremeFear = fgVal > 25;
+
+const isLongPullback = currentRsi < 45 || currentClose <= bb.lower;
+const isShortBounce = currentRsi > 55 || currentClose >= bb.upper;
+
+if (isUptrend && isLongPullback && isNotExtremeGreed) {
+  return { signal: "long", stop: currentClose - (2.0 * atr), target: currentClose + (3.5 * atr) };
+}
+
+if (isDowntrend && isShortBounce && isNotExtremeFear) {
+  return { signal: "short", stop: currentClose + (2.0 * atr), target: currentClose - (3.5 * atr) };
+}
+`;
+
 // The Weekly/Daily/4H swing setup already validated in
 // scripts/backtest-mtf-swing.js (+0.19R/trade, 309 trades across 15 liquid
 // pairs at 2R) and running live in the Market/Watchlist scan
@@ -193,8 +237,12 @@ return { signal: trade.direction, stop: trade.stop, target: trade.target, meta: 
 
 const PRESETS = [
   { key: "trendDipAtrExit", label: "Trend dip-buy, ATR stop/target exit (BTC/ETH 4H)", name: "Trend dip-buy, ATR exit", code: TREND_DIP_ATR_EXIT_CODE },
-  { key: "channelMidline", label: "Channel midline flip", name: "Channel midline flip", code: CHANNEL_MIDLINE_CODE },
-  { key: "pureMomentum", label: "Pure momentum (MACD cross)", name: "Pure momentum", code: PURE_MOMENTUM_CODE },
+  {
+    key: "trendDipAtrExitV2",
+    label: "Trend dip-buy v2, wider ATR + dead-cross exit (BTC/ETH 4H, better Calmar)",
+    name: "Trend dip-buy v2, wider ATR + dead-cross exit",
+    code: TREND_DIP_ATR_EXIT_V2_CODE,
+  },
   { key: "mtfSwing", label: "MTF Weekly/Daily/4H swing (validated, thin on SOL)", name: "MTF Weekly/Daily/4H swing", code: MTF_SWING_CODE, historyBars: "3600", warmupBars: "2520" },
 ];
 
@@ -373,46 +421,51 @@ function StrategyFormDialog({ title, initialForm, isNew, onSubmit, onCancel }) {
             className={`resize-y font-mono text-[12px] leading-relaxed ${inputClass}`}
           />
         </label>
-        <p className="text-[11px] text-dim">
-          Runs once per bar as the body of a function. <code>ctx.bars</code> is candle history up to "now" (no lookahead),{" "}
-          <code>ctx.position</code> is the currently open position or null. Return <code>"long"</code>, <code>"short"</code>,{" "}
-          <code>"close"</code>, or nothing to hold — or, on entry, <code>{"{ signal: \"long\"|\"short\", stop, target, meta }"}</code> to
-          also surface a suggested SL/TP in the signal check and its notification (informational only — the backtest still exits via your
-          own code's next-bar re-evaluation, not off a level tagged onto the entry). A signal fills at the <em>next</em> bar's open, not the
-          signal bar's own close — one bar of lag so the backtest can't act on a price before it could actually be traded. Runs in a
-          sandboxed worker with a 15s timeout.
-        </p>
-        <p className="text-[11px] text-dim">
-          <code>meta</code> — an optional free-form object your code can attach when opening a position; the engine persists it and hands
-          it back as <code>ctx.position.meta</code> on every later bar until the position closes. It's the only way to remember something
-          about your own entry beyond <code>direction</code>/<code>entryIndex</code>/<code>entryPrice</code> (which the engine already
-          tracks) — e.g. <code>meta: {"{ entryAtr: atr }"}</code> to pin a stop/target to the volatility at entry instead of recomputing{" "}
-          <code>atr</code> live each bar, which otherwise lets the stop/target silently drift with current volatility. Only populated in
-          the backtest; the live "Check current signal" button has no persisted position to draw it from.
-        </p>
-        <p className="text-[11px] text-dim">
-          <code>ctx.fearGreed</code> — Crypto Fear &amp; Greed Index (alternative.me), aligned 1:1 with <code>ctx.bars</code> (same length, no
-          lookahead): <code>ctx.fearGreed.at(-1)</code> is <code>{"{ value, classification, time }"}</code> for the bar at{" "}
-          <code>ctx.bars.at(-1)</code>, or <code>null</code> before 2018-02-01 / if the feed couldn't be fetched. <code>value</code> is 0-100 (0 =
-          extreme fear, 100 = extreme greed); market-wide, not per-symbol.
-        </p>
-        <p className="text-[11px] text-dim">
-          <code>ctx.ta</code> — note the argument shapes differ per function: <code>ema(closes, period)</code> and{" "}
-          <code>rsi(closes, period)</code> take an array of closes (e.g. <code>ctx.bars.map(b =&gt; b.close)</code>), not candles, and return
-          one value per bar. <code>atr(candles, period)</code> and <code>bollingerBands(closes, period, mult)</code> return a single latest
-          reading, not an array — no <code>.at(-1)</code> needed; <code>bollingerBands</code> returns{" "}
-          <code>{"{ upper, lower, basis, percentB, bandwidthPct }"}</code>. <code>linearRegressionChannel(candles, {"{ lookback }"})</code> returns
-          one <code>{"{ mid, upper, lower }"}</code> per bar in the window. Also available: <code>macd</code>, <code>zScore</code>,{" "}
-          <code>rollingMean</code>, <code>rollingStd</code>, <code>findSwingLevels</code>, <code>analyzeCandles</code>.
-        </p>
-        <p className="text-[11px] text-dim">
-          <code>ctx.mtf</code> — <code>{"{ buildDailyCandles, buildWeeklyCandles, findMtfSignal, buildTrade }"}</code>, the exact
-          Weekly/Daily/4H swing setup functions the Market/Watchlist scan and its backtest use, re-exposed so a strategy can run that same
-          validated rule standalone. <code>buildDailyCandles(bars)</code> and <code>buildWeeklyCandles(daily)</code> resample up from{" "}
-          <code>ctx.bars</code> (dropping any still-forming trailing bucket); <code>findMtfSignal(weekly, daily, bars)</code> returns a
-          signal or null; <code>buildTrade(signal, rMultiple)</code> turns it into <code>{"{ direction, entry, stop, target, rr }"}</code>.
-          See the MTF preset above for the intended shape.
-        </p>
+        <details className="text-[11px] text-dim">
+          <summary className="cursor-pointer select-none hover:text-ink">Reference: ctx API</summary>
+          <div className="mt-2 flex flex-col gap-2">
+            <p>
+              Runs once per bar as the body of a function. <code>ctx.bars</code> is candle history up to "now" (no lookahead),{" "}
+              <code>ctx.position</code> is the currently open position or null. Return <code>"long"</code>, <code>"short"</code>,{" "}
+              <code>"close"</code>, or nothing to hold — or, on entry, <code>{"{ signal: \"long\"|\"short\", stop, target, meta }"}</code> to
+              also surface a suggested SL/TP in the signal check and its notification (informational only — the backtest still exits via your
+              own code's next-bar re-evaluation, not off a level tagged onto the entry). A signal fills at the <em>next</em> bar's open, not the
+              signal bar's own close — one bar of lag so the backtest can't act on a price before it could actually be traded. Runs in a
+              sandboxed worker with a 15s timeout.
+            </p>
+            <p>
+              <code>meta</code> — an optional free-form object your code can attach when opening a position; the engine persists it and hands
+              it back as <code>ctx.position.meta</code> on every later bar until the position closes. It's the only way to remember something
+              about your own entry beyond <code>direction</code>/<code>entryIndex</code>/<code>entryPrice</code> (which the engine already
+              tracks) — e.g. <code>meta: {"{ entryAtr: atr }"}</code> to pin a stop/target to the volatility at entry instead of recomputing{" "}
+              <code>atr</code> live each bar, which otherwise lets the stop/target silently drift with current volatility. Only populated in
+              the backtest; the live "Check current signal" button has no persisted position to draw it from.
+            </p>
+            <p>
+              <code>ctx.fearGreed</code> — Crypto Fear &amp; Greed Index (alternative.me), aligned 1:1 with <code>ctx.bars</code> (same length, no
+              lookahead): <code>ctx.fearGreed.at(-1)</code> is <code>{"{ value, classification, time }"}</code> for the bar at{" "}
+              <code>ctx.bars.at(-1)</code>, or <code>null</code> before 2018-02-01 / if the feed couldn't be fetched. <code>value</code> is 0-100 (0 =
+              extreme fear, 100 = extreme greed); market-wide, not per-symbol.
+            </p>
+            <p>
+              <code>ctx.ta</code> — note the argument shapes differ per function: <code>ema(closes, period)</code> and{" "}
+              <code>rsi(closes, period)</code> take an array of closes (e.g. <code>ctx.bars.map(b =&gt; b.close)</code>), not candles, and return
+              one value per bar. <code>atr(candles, period)</code> and <code>bollingerBands(closes, period, mult)</code> return a single latest
+              reading, not an array — no <code>.at(-1)</code> needed; <code>bollingerBands</code> returns{" "}
+              <code>{"{ upper, lower, basis, percentB, bandwidthPct }"}</code>. <code>linearRegressionChannel(candles, {"{ lookback }"})</code> returns
+              one <code>{"{ mid, upper, lower }"}</code> per bar in the window. Also available: <code>macd</code>, <code>zScore</code>,{" "}
+              <code>rollingMean</code>, <code>rollingStd</code>, <code>findSwingLevels</code>, <code>analyzeCandles</code>.
+            </p>
+            <p>
+              <code>ctx.mtf</code> — <code>{"{ buildDailyCandles, buildWeeklyCandles, findMtfSignal, buildTrade }"}</code>, the exact
+              Weekly/Daily/4H swing setup functions the Market/Watchlist scan and its backtest use, re-exposed so a strategy can run that same
+              validated rule standalone. <code>buildDailyCandles(bars)</code> and <code>buildWeeklyCandles(daily)</code> resample up from{" "}
+              <code>ctx.bars</code> (dropping any still-forming trailing bucket); <code>findMtfSignal(weekly, daily, bars)</code> returns a
+              signal or null; <code>buildTrade(signal, rMultiple)</code> turns it into <code>{"{ direction, entry, stop, target, rr }"}</code>.
+              See the MTF preset above for the intended shape.
+            </p>
+          </div>
+        </details>
 
         <div className="flex items-center gap-2">
           <button type="submit" className="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:opacity-90">
@@ -428,54 +481,58 @@ function StrategyFormDialog({ title, initialForm, isNew, onSubmit, onCancel }) {
   );
 }
 
-function StatTile({ label, value, tone }) {
-  return (
-    <div>
-      <div className="text-[11px] uppercase tracking-wide text-dim">{label}</div>
-      <div className={`mt-0.5 text-[15px] font-semibold ${tone === "up" ? "text-position-long" : tone === "down" ? "text-position-short" : "text-ink"}`}>
-        {value}
-      </div>
-    </div>
-  );
+// Colored value span for a stat -- the label now lives in the summary
+// table's column header (see StrategiesPanel's columns), not repeated here.
+function StatCell({ value, tone }) {
+  return <span className={tone === "up" ? "text-position-long" : tone === "down" ? "text-position-short" : "text-ink"}>{value}</span>;
 }
 
+// Supporting detail for a strategy's backtest -- the headline numbers
+// (trades, win rate, expectancy, compounded return, max drawdown, Calmar)
+// live in the summary table row directly above this (see StrategiesPanel's
+// columns), so this only carries what didn't fit there: the underlying
+// avg win/loss/CI/buy-hold context and the full trade-by-trade list.
 function StrategyResult({ result }) {
   if (!result) return null;
 
   if (result.status === "running") {
-    return <p className="mt-3 border-t border-edge pt-3 text-[12px] text-dim">Fetching history and running backtest…</p>;
+    return <p className="text-[12px] text-dim">Fetching history and running backtest…</p>;
   }
 
   if (result.status === "error") {
-    return <p className="mt-3 border-t border-edge pt-3 text-[12px] text-position-short">{result.message}</p>;
+    return <p className="text-[12px] text-position-short">{result.message}</p>;
   }
 
   const { summary, holdPct, ranAt } = result;
 
   if (summary.n === 0) {
-    return (
-      <p className="mt-3 border-t border-edge pt-3 text-[12px] text-dim">
-        No trades over this window — the strategy never returned "long" or "short".
-      </p>
-    );
+    return <p className="text-[12px] text-dim">No trades over this window — the strategy never returned "long" or "short".</p>;
   }
 
+  // Trades are pushed in chronological order as the backtest loop runs, so
+  // the last element is the most recent one to have CLOSED -- if a position
+  // was still open on the final bar of the window, it never got pushed to
+  // `trades` at all (see strategyWorker.js), so this can lag the truth by
+  // one open trade rather than always being "the very last thing the
+  // strategy did."
+  const lastTrade = result.trades?.at(-1);
+
   return (
-    <div className="mt-3 flex flex-col gap-3 border-t border-edge pt-3">
-      <div className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
-        <StatTile label="Trades" value={summary.n} />
-        <StatTile label="Win rate" value={`${(summary.winRate * 100).toFixed(1)}%`} />
-        <StatTile
-          label="Expectancy / trade"
-          value={`${summary.expectancyPct >= 0 ? "+" : ""}${summary.expectancyPct.toFixed(2)}%`}
-          tone={summary.expectancyPct >= 0 ? "up" : "down"}
-        />
-        <StatTile
-          label="Compounded return"
-          value={`${summary.compoundedPct >= 0 ? "+" : ""}${summary.compoundedPct.toFixed(1)}%`}
-          tone={summary.compoundedPct >= 0 ? "up" : "down"}
-        />
-      </div>
+    <div className="flex flex-col gap-3">
+      {lastTrade && (
+        <p className="text-[12px]">
+          <span className="text-dim">Last signal: </span>
+          <span className={`font-semibold uppercase tracking-wide ${lastTrade.direction === "short" ? "text-position-short" : "text-position-long"}`}>
+            {lastTrade.direction}
+          </span>
+          <span className="text-dim">
+            {" "}
+            entered {fmtDateTime(lastTrade.entryTime)} @ {fmtPrice(lastTrade.entryClose)}, closed {fmtDateTime(lastTrade.exitTime)} @{" "}
+            {fmtPrice(lastTrade.exitClose)} ({lastTrade.netPct >= 0 ? "+" : ""}
+            {lastTrade.netPct.toFixed(2)}%)
+          </span>
+        </p>
+      )}
       <p className="text-[12px] text-dim">
         Avg win +{summary.avgWinPct.toFixed(2)}% · avg loss {summary.avgLossPct.toFixed(2)}% · avg hold {summary.avgBarsHeld.toFixed(1)} bars · 95% CI
         on win rate {(summary.ci[0] * 100).toFixed(1)}%–{(summary.ci[1] * 100).toFixed(1)}%
@@ -573,70 +630,18 @@ function PositionInput({ value, onChange }) {
   );
 }
 
-function AutoCheckToggle({ strategy, blocked, onToggle, onPollMinutesChange }) {
-  const enabled = !!strategy.autoCheck;
-  return (
-    <div className="flex flex-wrap items-center gap-2 text-[12px]">
-      <label className="flex items-center gap-1.5 text-dim">
-        <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)} />
-        Auto-check every
-      </label>
-      <select
-        value={strategy.pollMinutes ?? 15}
-        onChange={(e) => onPollMinutesChange(Number(e.target.value))}
-        disabled={!enabled}
-        className={`${inputClass} py-1`}
-      >
-        {POLL_MINUTES_OPTIONS.map((m) => (
-          <option key={m} value={m}>
-            {m} min
-          </option>
-        ))}
-      </select>
-      {enabled && !blocked && <span className="text-dim">— notifies on a new signal, using the position set below</span>}
-      {enabled && blocked && (
-        <span className="text-position-short">Notifications are blocked for this app — enable them in your OS settings to get alerts.</span>
-      )}
-    </div>
-  );
-}
-
-function StrategyCard({ strategy, result, signalResult, positionInput, onPositionChange, onRun, onCheckSignal, onToggleAutoCheck, onPollMinutesChange, notifBlocked, onEdit, onDelete }) {
-  const running = result?.status === "running";
+// Expanded-row detail for one strategy (see StrategiesPanel's renderExpanded)
+// -- Run/Edit/Delete live in the summary table's Actions column, and
+// auto-check is a live checkbox+interval in its own column (see
+// StrategiesPanel's columns), both so those controls work without opening
+// this panel at all.
+function StrategyDetail({ result, signalResult, positionInput, onPositionChange, onCheckSignal }) {
   const checkingSignal = signalResult?.status === "running";
   return (
-    <div className="rounded-card border border-edge bg-panel p-5 shadow-card">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="text-[14px] font-semibold">{strategy.name || strategy.symbol}</h3>
-          <p className="text-[11px] text-dim">
-            {strategy.symbol} · {TIMEFRAME_LABEL[strategy.timeframe]} · {strategy.historyBars} bars history · {strategy.warmupBars} bar warmup
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onRun}
-            disabled={running}
-            className="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {running ? "Running…" : "Run backtest"}
-          </button>
-          <button type="button" onClick={onEdit} className="rounded-lg border border-edge px-2.5 py-1 text-[12px] font-medium text-ink hover:bg-panel-alt">
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            className="rounded-lg border border-edge px-2.5 py-1 text-[12px] font-medium text-position-short hover:bg-panel-alt"
-          >
-            Delete
-          </button>
-        </div>
-      </div>
+    <div className="flex flex-col gap-3">
       <StrategyResult result={result} />
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-edge pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-edge pt-3">
         <PositionInput value={positionInput} onChange={onPositionChange} />
         <button
           type="button"
@@ -648,25 +653,13 @@ function StrategyCard({ strategy, result, signalResult, positionInput, onPositio
         </button>
       </div>
       <SignalResult result={signalResult} />
-
-      <div className="mt-3 border-t border-edge pt-3">
-        <AutoCheckToggle
-          strategy={strategy}
-          blocked={notifBlocked}
-          onToggle={(checked) => onToggleAutoCheck(checked)}
-          onPollMinutesChange={onPollMinutesChange}
-        />
-      </div>
     </div>
   );
 }
 
-export default function StrategiesPanel() {
-  const strategies = useStrategies();
+export default function StrategiesPanel({ strategies, strategySignals }) {
   const [editingId, setEditingId] = useState(null); // "new" | existing strategy id | null
   const [results, setResults] = useState({});
-  const [signals, setSignals] = useState({});
-  const [positionInputs, setPositionInputs] = useState({});
   const [notifBlocked, setNotifBlocked] = useState(false);
   const [testStatus, setTestStatus] = useState(null);
 
@@ -698,6 +691,17 @@ export default function StrategiesPanel() {
     });
   }, [strategies.strategies]);
 
+  // Every strategy gets a live signal check as soon as the tab loads, not
+  // just autoCheck ones (that flag only governs background polling/
+  // notifications) -- otherwise the Signal column sits on "—" until the
+  // user clicks "Check current signal" per row. `main`'s key={tab} in
+  // App.jsx remounts this component each time the tab is opened, so `[]`
+  // means "once per visit to this tab", same intent as the notifBlocked
+  // effect above.
+  useEffect(() => {
+    strategies.strategies.forEach((s) => strategySignals.runSignalCheck(s));
+  }, []);
+
   const editingStrategy = editingId && editingId !== "new" ? strategies.strategies.find((s) => s.id === editingId) : null;
 
   const runStrategy = async (strategy) => {
@@ -705,7 +709,7 @@ export default function StrategiesPanel() {
     try {
       const candles = await getCachedCandles(strategy.symbol, strategy.timeframe, strategy.historyBars);
       if (candles.length < strategy.warmupBars + 10) {
-        throw new Error(`Only got ${candles.length} candles for ${strategy.symbol} — not enough history for a ${strategy.warmupBars}-bar warmup.`);
+        throw notEnoughHistoryError(strategy.symbol, strategy.warmupBars, candles.length);
       }
       const trades = await runStrategyBacktest({ candles, code: strategy.code, warmupBars: strategy.warmupBars });
       const summary = summarizeTrades(trades);
@@ -722,50 +726,213 @@ export default function StrategiesPanel() {
     }
   };
 
-  // Shared by the manual "Check current signal" button and the background
-  // poller below -- both need the exact same read (same position input,
-  // same signals-state update) so a poll tick and a manual click can't show
-  // conflicting results. Returns the { signal, bar } outcome (or undefined on
-  // error, already surfaced via the signals state) so the poller can decide
-  // whether it's new enough to notify on.
-  const runSignalCheck = async (strategy) => {
-    const input = positionInputs[strategy.id] ?? { direction: "flat", entryPrice: "" };
-    const position =
-      input.direction === "flat"
-        ? null
-        : { direction: input.direction, entryPrice: input.entryPrice === "" ? null : parseFloat(input.entryPrice), entryIndex: null };
-
-    setSignals((s) => ({ ...s, [strategy.id]: { status: "running" } }));
-    try {
-      // Only needs enough trailing history for the strategy's own
-      // indicators to warm up — reuses the strategy's saved historyBars so
-      // the live read sees the same amount of context the backtest did, and
-      // shares the same cache entry as "Run backtest" for this strategy.
-      const candles = await getCachedCandles(strategy.symbol, strategy.timeframe, strategy.historyBars);
-      if (candles.length < strategy.warmupBars + 1) {
-        throw new Error(`Only got ${candles.length} candles for ${strategy.symbol} — not enough history for a ${strategy.warmupBars}-bar warmup.`);
-      }
-      const { signal, bar } = await runStrategySignal({ candles, code: strategy.code, position });
-      setSignals((s) => ({ ...s, [strategy.id]: { status: "done", signal, bar } }));
-      return { signal, bar };
-    } catch (err) {
-      setSignals((s) => ({ ...s, [strategy.id]: { status: "error", message: err.message } }));
-    }
-  };
-
-  useSignalPolling(strategies.strategies, runSignalCheck);
-
-  // Page-level preview, not tied to any one card. Uses the first saved
+  // Page-level preview, not tied to any one row. Uses the first saved
   // strategy's real signal check (same as "Check current signal") so the
   // toast's bar/stop/target are genuine when possible; falls back to a
   // placeholder name when there are no strategies yet.
   const testNotify = async () => {
     const strategy = strategies.strategies[0];
-    const outcome = strategy ? await runSignalCheck(strategy) : undefined;
+    const outcome = strategy ? await strategySignals.runSignalCheck(strategy) : undefined;
     const status = await sendTestNotification(strategy ?? { name: "Test strategy", symbol: "TEST", timeframe: "4h" }, outcome);
     setTestStatus(status);
     if (status === "denied") setNotifBlocked(true);
   };
+
+  const deleteStrategy = (id) => {
+    strategies.remove(id);
+    setResults((r) => {
+      const { [id]: _, ...rest } = r;
+      return rest;
+    });
+    strategySignals.clearStrategy(id);
+  };
+
+  const toggleAutoCheck = async (id, checked) => {
+    if (checked) {
+      const status = await ensureNotificationPermission();
+      setNotifBlocked(status === "denied");
+    }
+    strategies.update(id, { autoCheck: checked });
+  };
+
+  // Defined inline (not lifted to a separate module like scanColumns.jsx's
+  // buildScanColumns) since formatters need to close over `results` and
+  // `strategySignals` -- unlike the Market/Watchlist columns, which only
+  // render static row data.
+  const columns = [
+    {
+      key: "name",
+      title: "Strategy",
+      filter: "text",
+      filterValue: (r) => `${r.name} ${r.symbol}`,
+      sortValue: (r) => r.name || r.symbol,
+      formatter: (r) => (
+        <div>
+          <div className="font-medium text-ink">{r.name || r.symbol}</div>
+          <div className="text-[11px] text-dim">
+            {r.symbol} · {TIMEFRAME_LABEL[r.timeframe]} · {r.historyBars} bars
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "trades",
+      title: "Trades",
+      align: "right",
+      sortValue: (r) => results[r.id]?.summary?.n ?? -1,
+      formatter: (r) => (results[r.id]?.status === "done" ? results[r.id].summary.n : "—"),
+    },
+    {
+      key: "winRate",
+      title: "Win rate",
+      align: "right",
+      sortValue: (r) => results[r.id]?.summary?.winRate ?? -1,
+      formatter: (r) => {
+        const s = results[r.id];
+        return s?.status === "done" ? `${(s.summary.winRate * 100).toFixed(1)}%` : "—";
+      },
+    },
+    {
+      key: "expectancy",
+      title: "Expectancy",
+      align: "right",
+      sortValue: (r) => results[r.id]?.summary?.expectancyPct ?? -Infinity,
+      formatter: (r) => {
+        const s = results[r.id];
+        if (s?.status !== "done") return "—";
+        const v = s.summary.expectancyPct;
+        return <StatCell value={`${v >= 0 ? "+" : ""}${v.toFixed(2)}%`} tone={v >= 0 ? "up" : "down"} />;
+      },
+    },
+    {
+      key: "compounded",
+      title: "Compounded",
+      align: "right",
+      sortValue: (r) => results[r.id]?.summary?.compoundedPct ?? -Infinity,
+      formatter: (r) => {
+        const s = results[r.id];
+        if (s?.status !== "done") return "—";
+        const v = s.summary.compoundedPct;
+        return <StatCell value={`${v >= 0 ? "+" : ""}${v.toFixed(1)}%`} tone={v >= 0 ? "up" : "down"} />;
+      },
+    },
+    {
+      key: "maxDrawdown",
+      title: "Max DD",
+      align: "right",
+      sortValue: (r) => results[r.id]?.summary?.maxDrawdownPct ?? -1,
+      formatter: (r) => {
+        const s = results[r.id];
+        if (s?.status !== "done" || s.summary.maxDrawdownPct == null) return "—";
+        const v = s.summary.maxDrawdownPct;
+        return <StatCell value={`-${v.toFixed(1)}%`} tone={v > 0 ? "down" : undefined} />;
+      },
+    },
+    {
+      key: "calmar",
+      title: "Calmar",
+      align: "right",
+      sortValue: (r) => results[r.id]?.summary?.calmarRatio ?? -Infinity,
+      formatter: (r) => {
+        const s = results[r.id];
+        if (s?.status !== "done" || s.summary.calmarRatio == null) return "—";
+        const v = s.summary.calmarRatio;
+        return <StatCell value={v.toFixed(2)} tone={v >= 1 ? "up" : "down"} />;
+      },
+    },
+    {
+      key: "signal",
+      title: "Signal",
+      sortValue: (r) => strategySignals.signals[r.id]?.signal ?? "",
+      formatter: (r) => {
+        const sig = strategySignals.signals[r.id];
+        if (!sig || sig.status !== "done") return <span className="text-dim">—</span>;
+        const { direction } = normalizeSignal(sig.signal);
+        const label = SIGNAL_LABEL[direction];
+        return (
+          <span
+            className={`text-[11px] font-semibold ${label ? (label.tone === "up" ? "text-position-long" : label.tone === "down" ? "text-position-short" : "text-accent") : "text-dim"}`}
+          >
+            {label ? label.text : "NO SIGNAL"}
+          </span>
+        );
+      },
+    },
+    {
+      key: "autoCheck",
+      title: "Auto-check",
+      sortValue: (r) => (r.autoCheck ? (r.pollMinutes ?? 15) : -1),
+      // A live control, not just a status badge -- this is the actual
+      // enable/disable switch for notifications, kept at row level (not
+      // behind the expand toggle) since flipping it on/off is the single
+      // most common thing to want to do to a strategy without digging in.
+      formatter: (r) => (
+        <div className="flex items-center gap-1.5">
+          <label className="flex items-center gap-1 text-[12px] text-dim" title={r.autoCheck ? "Disable notifications" : "Enable notifications"}>
+            <input type="checkbox" checked={!!r.autoCheck} onChange={(e) => toggleAutoCheck(r.id, e.target.checked)} />
+          </label>
+          <select
+            value={r.pollMinutes ?? 15}
+            onChange={(e) => strategies.update(r.id, { pollMinutes: Number(e.target.value) })}
+            disabled={!r.autoCheck}
+            className="rounded border border-edge bg-bg px-1 py-0.5 text-[11px] text-ink outline-none disabled:opacity-40"
+          >
+            {POLL_MINUTES_OPTIONS.map((m) => (
+              <option key={m} value={m}>
+                {m}m
+              </option>
+            ))}
+          </select>
+          {r.autoCheck && notifBlocked && (
+            <span className="text-position-short" title="Notifications are blocked for this app — enable them in your OS settings to get alerts.">
+              ⚠
+            </span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "actions",
+      title: "",
+      sortable: false,
+      formatter: (r) => (
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => runStrategy(r)}
+            disabled={results[r.id]?.status === "running"}
+            className="rounded border border-edge px-1.5 py-0.5 text-[11px] font-medium text-ink hover:bg-panel-alt disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {results[r.id]?.status === "running" ? "…" : "Run"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditingId(r.id)}
+            className="rounded border border-edge px-1.5 py-0.5 text-[11px] font-medium text-ink hover:bg-panel-alt"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => deleteStrategy(r.id)}
+            className="rounded border border-edge px-1.5 py-0.5 text-[11px] font-medium text-position-short hover:bg-panel-alt"
+          >
+            Delete
+          </button>
+        </div>
+      ),
+    },
+  ];
+
+  const renderExpanded = (r) => (
+    <StrategyDetail
+      result={results[r.id]}
+      signalResult={strategySignals.signals[r.id]}
+      positionInput={strategySignals.positionInputs[r.id]}
+      onPositionChange={(next) => strategySignals.setPositionInput(r.id, next)}
+      onCheckSignal={() => strategySignals.runSignalCheck(r)}
+    />
+  );
 
   return (
     <div className="flex flex-col gap-5">
@@ -795,50 +962,14 @@ export default function StrategiesPanel() {
         </div>
       </div>
 
-      {strategies.strategies.length === 0 && (
-        <div className="rounded-card border border-edge bg-panel p-8 text-center text-[13px] text-dim shadow-card">
-          No strategies yet — write one to backtest a rule against real history instead of a one-off script.
-        </div>
-      )}
-
-      <div className="flex flex-col gap-4">
-        {strategies.strategies.map((s) => (
-          <StrategyCard
-            key={s.id}
-            strategy={s}
-            result={results[s.id]}
-            signalResult={signals[s.id]}
-            positionInput={positionInputs[s.id]}
-            onPositionChange={(next) => setPositionInputs((p) => ({ ...p, [s.id]: next }))}
-            onRun={() => runStrategy(s)}
-            onCheckSignal={() => runSignalCheck(s)}
-            onToggleAutoCheck={async (checked) => {
-              if (checked) {
-                const status = await ensureNotificationPermission();
-                setNotifBlocked(status === "denied");
-              }
-              strategies.update(s.id, { autoCheck: checked });
-            }}
-            onPollMinutesChange={(minutes) => strategies.update(s.id, { pollMinutes: minutes })}
-            notifBlocked={notifBlocked}
-            onEdit={() => setEditingId(s.id)}
-            onDelete={() => {
-              strategies.remove(s.id);
-              setResults((r) => {
-                const { [s.id]: _, ...rest } = r;
-                return rest;
-              });
-              setSignals((sg) => {
-                const { [s.id]: _, ...rest } = sg;
-                return rest;
-              });
-              setPositionInputs((p) => {
-                const { [s.id]: _, ...rest } = p;
-                return rest;
-              });
-            }}
-          />
-        ))}
+      <div className="rounded-card border border-edge bg-panel shadow-card">
+        <DataTable
+          columns={columns}
+          data={strategies.strategies}
+          emptyText="No strategies yet — write one to backtest a rule against real history instead of a one-off script."
+          renderExpanded={renderExpanded}
+          stateKey="strategies"
+        />
       </div>
 
       {editingId && (

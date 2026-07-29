@@ -311,7 +311,12 @@ function clamp(v, lo, hi) {
 // Continuous trend factor (not just a three-way label): EMA20-vs-EMA50
 // separation as a % of price, scaled to a -30..+30 contribution, halved if
 // EMA50 disagrees with EMA200 (i.e. short and long-term trend conflict).
-function trendFactor(closes) {
+// Exported (not just an analyzeCandles internal) so standalone backtest
+// scripts can reuse its "sideways" read as a regime filter -- e.g.
+// scripts/backtest-zscore-tune-regime.js gating mean-reversion entries to
+// only fire outside a trending regime -- without hand-copying the EMA
+// separation logic and risking it drifting from the live version.
+export function trendFactor(closes) {
   const ema20 = ema(closes, 20).at(-1);
   const ema50 = ema(closes, 50).at(-1);
   const ema200 = closes.length >= 200 ? ema(closes, 200).at(-1) : null;
