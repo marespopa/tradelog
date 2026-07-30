@@ -6,7 +6,7 @@ import { useLivePrices } from "../hooks/useLivePrices.js";
 import { useEntryRiskCheck } from "../hooks/useEntryRiskCheck.js";
 import { useTradingRules } from "../hooks/useTradingRules.js";
 import { fmtDurationExact, fmtPrice, fmtRiskReward, fmtUsd } from "../lib/format.js";
-import { parseOkxOrder } from "../lib/okxOrder.js";
+import { parseSignalText } from "../lib/signalText.js";
 import { computeSuggestedSize } from "../lib/tradeChecklist.js";
 
 // "YYYY-MM-DDTHH:mm" in the viewer's *local* time, for pre-filling a
@@ -328,9 +328,9 @@ function TradeFormDialog({ title, submitLabel, initialForm, onSubmit, onCancel, 
   };
 
   const fillFromPaste = () => {
-    const parsed = parseOkxOrder(pasteText);
+    const parsed = parseSignalText(pasteText);
     if (!parsed) {
-      setPasteNotice("Couldn't find order details in that text.");
+      setPasteNotice("Couldn't find signal details in that text.");
       return;
     }
     setForm((f) => ({
@@ -340,8 +340,9 @@ function TradeFormDialog({ title, submitLabel, initialForm, onSubmit, onCancel, 
       entryPrice: parsed.entryPrice != null ? String(parsed.entryPrice) : f.entryPrice,
       stopLoss: parsed.stopLoss != null ? String(parsed.stopLoss) : f.stopLoss,
       targetPrice: parsed.targetPrice != null ? String(parsed.targetPrice) : f.targetPrice,
+      entryTime: parsed.entryTime ? toDatetimeLocal(new Date(parsed.entryTime)) : f.entryTime,
     }));
-    setPasteNotice("Filled from OKX order — check the fields below.");
+    setPasteNotice("Filled from signal — check the fields below.");
   };
 
   const submit = (e) => {
@@ -359,14 +360,14 @@ function TradeFormDialog({ title, submitLabel, initialForm, onSubmit, onCancel, 
         <h2 className="text-[14px] font-semibold">{title}</h2>
 
         <label className="flex flex-col gap-1 text-[11px] text-dim">
-          Paste an OKX order ticket (optional)
+          Paste a strategy signal (optional)
           <textarea
             value={pasteText}
             onChange={(e) => {
               setPasteText(e.target.value);
               setPasteNotice("");
             }}
-            placeholder={"e.g. Price\n1,855.11 USD\nAmount\n0.053905 ETH\nTP trigger price\n1,921.76 USD\nSL trigger price\n1,821.61 USD"}
+            placeholder="e.g. BTC SHORT @ $64,838.10 · Jul 30, 15:00 · stop $66,279.33 · target $62,315.95"
             rows={2}
             className={`resize-none ${inputClass}`}
           />
@@ -378,7 +379,7 @@ function TradeFormDialog({ title, submitLabel, initialForm, onSubmit, onCancel, 
             disabled={!pasteText.trim()}
             className="rounded-lg border border-edge px-2.5 py-1 text-[12px] font-medium text-ink hover:bg-panel-alt disabled:opacity-40"
           >
-            Fill from OKX order
+            Fill from paste
           </button>
           {pasteNotice && <span className="text-[12px] text-dim">{pasteNotice}</span>}
         </div>
@@ -589,7 +590,7 @@ function CloseTradeDialog({ trade, onClose, onCancel }) {
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
   const fillFromPaste = () => {
-    const parsed = parseOkxOrder(pasteText);
+    const parsed = parseSignalText(pasteText);
     if (parsed?.entryPrice != null) {
       setForm((f) => ({ ...f, exitPrice: String(parsed.entryPrice) }));
     }
@@ -616,11 +617,11 @@ function CloseTradeDialog({ trade, onClose, onCancel }) {
         </h2>
 
         <label className="flex flex-col gap-1 text-[11px] text-dim">
-          Paste an OKX order ticket (optional)
+          Paste a strategy signal (optional)
           <textarea
             value={pasteText}
             onChange={(e) => setPasteText(e.target.value)}
-            placeholder="e.g. Price&#10;1,921.76 USD"
+            placeholder="e.g. BTC CLOSE @ $62,315.95 · Jul 30, 15:00"
             rows={2}
             className={`resize-none ${inputClass}`}
           />
@@ -631,7 +632,7 @@ function CloseTradeDialog({ trade, onClose, onCancel }) {
           disabled={!pasteText.trim()}
           className="-mt-1 self-start rounded-lg border border-edge px-2.5 py-1 text-[12px] font-medium text-ink hover:bg-panel-alt disabled:opacity-40"
         >
-          Fill from OKX order
+          Fill from paste
         </button>
 
         <div className="flex flex-wrap items-end gap-3">
