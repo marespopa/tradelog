@@ -4,6 +4,8 @@ import { useWatchlist } from "./hooks/useWatchlist.js";
 import { useTrades } from "./hooks/useTrades.js";
 import { useStrategies } from "./hooks/useStrategies.js";
 import { useStrategySignals } from "./hooks/useStrategySignals.js";
+import { useWatchlistAlarms } from "./hooks/useWatchlistAlarms.js";
+import AlarmsMenu from "./components/AlarmsMenu.jsx";
 
 const CoinAnalysis = lazy(() => import("./components/CoinAnalysis.jsx"));
 const MarketPanel = lazy(() => import("./components/MarketPanel.jsx"));
@@ -41,6 +43,10 @@ export default function App() {
   // notifications -- keeps running while any other tab is open, not just
   // while Strategies itself is mounted (App.jsx only renders the active tab).
   const strategySignals = useStrategySignals(strategies.strategies);
+  // Same "owned by App.jsx, not the tab's own panel" reasoning as
+  // strategySignals above: its background poller (and thus notifications)
+  // needs to keep running while any other tab is open, not just Watchlist.
+  const watchlistAlarms = useWatchlistAlarms();
   const [{ tab, coin }, setUrlState] = useState(readUrlState);
   // Which nav tab to return to from analysis — set whenever a row is
   // clicked from scan or watchlist, so "Back" lands wherever you came from.
@@ -100,7 +106,11 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="flex flex-1 items-center justify-end">
+        <div className="flex flex-1 items-center justify-end gap-2">
+          <AlarmsMenu
+            watchlistAlarms={watchlistAlarms}
+            onSelectSymbol={(symbol) => selectCoin(symbol, tab === "analysis" ? returnTab : tab)}
+          />
           <button
             type="button"
             onClick={cycle}
@@ -118,7 +128,11 @@ export default function App() {
           {tab === "market" && <MarketPanel onSelectSymbol={(symbol) => selectCoin(symbol, "market")} watchlist={watchlist} />}
 
           {tab === "watchlist" && (
-            <WatchlistPanel watchlist={watchlist} onSelectSymbol={(symbol) => selectCoin(symbol, "watchlist")} />
+            <WatchlistPanel
+              watchlist={watchlist}
+              watchlistAlarms={watchlistAlarms}
+              onSelectSymbol={(symbol) => selectCoin(symbol, "watchlist")}
+            />
           )}
 
           {tab === "trades" && <TradesPanel trades={trades} />}
@@ -130,7 +144,12 @@ export default function App() {
               <button type="button" onClick={goBack} className="self-start text-[13px] text-dim hover:text-ink">
                 ← Back to {NAV_TABS.find((t) => t.key === returnTab)?.label.toLowerCase() ?? "market"}
               </button>
-              <CoinAnalysis symbol={coin} onSymbolChange={(symbol) => navigate({ coin: symbol })} watchlist={watchlist} />
+              <CoinAnalysis
+                symbol={coin}
+                onSymbolChange={(symbol) => navigate({ coin: symbol })}
+                watchlist={watchlist}
+                watchlistAlarms={watchlistAlarms}
+              />
             </>
           )}
         </Suspense>

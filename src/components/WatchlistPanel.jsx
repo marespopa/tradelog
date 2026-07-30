@@ -12,7 +12,7 @@ import { buildScanColumns, renderScanDetails } from "../lib/scanColumns.jsx";
 // whatever the scan already fetched. Also shares the market-bias query the
 // same way, and applies the identical attachEntry() join so a watched
 // symbol's Entry/Weekly/Daily columns match what the Market tab would show.
-export default function WatchlistPanel({ watchlist, onSelectSymbol }) {
+export default function WatchlistPanel({ watchlist, watchlistAlarms, onSelectSymbol }) {
   const { data, isLoading, isFetching, error } = useSetupFinder(100);
   const { data: bias } = useMarketBias(100);
 
@@ -43,7 +43,7 @@ export default function WatchlistPanel({ watchlist, onSelectSymbol }) {
     );
   }, [watchlist.symbols, scanBySymbol, unscannedPrices]);
 
-  const columns = useMemo(() => buildScanColumns(watchlist), [watchlist]);
+  const columns = useMemo(() => buildScanColumns(watchlist, { alarms: watchlistAlarms }), [watchlist, watchlistAlarms]);
 
   const handleReorder = (newRows) => watchlist.setOrder(newRows.map((r) => r.symbol));
 

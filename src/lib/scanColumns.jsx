@@ -1,4 +1,5 @@
 import WatchButton from "../components/WatchButton.jsx";
+import AlarmCell from "../components/AlarmCell.jsx";
 import { fmt } from "./format.js";
 
 function vs200Ema(row) {
@@ -85,7 +86,7 @@ function FairValueBadge({ value }) {
 // prepended. Rows are expected to carry weeklyBias/dailyTrend/mtfTrade
 // (attached by attachEntry's merge of useSetupFinder + useMarketBias) in
 // addition to the raw per-4H-candle stats from analyzeCandles().
-export function buildScanColumns(watchlist, { excludeKeys = [], showKeys = [] } = {}) {
+export function buildScanColumns(watchlist, { excludeKeys = [], showKeys = [], alarms } = {}) {
   const columns = [
     { key: "symbol", title: "Symbol", filter: "text" },
     {
@@ -184,6 +185,26 @@ export function buildScanColumns(watchlist, { excludeKeys = [], showKeys = [] } 
       width: 32,
       sortable: false,
       formatter: (r) => <WatchButton active={watchlist.has(r.symbol)} onToggle={() => watchlist.toggle(r.symbol)} />,
+    });
+  }
+
+  // Only passed by the Watchlist tab (see WatchlistPanel.jsx) -- alarms are
+  // a watchlist-only concept, so MarketPanel's call (no `alarms` option)
+  // never gets this column.
+  if (alarms) {
+    columns.push({
+      key: "alarm",
+      title: "Alarm",
+      sortable: false,
+      formatter: (r) => (
+        <AlarmCell
+          symbol={r.symbol}
+          alarm={alarms.alarms[r.symbol]}
+          currentPrice={r.current}
+          onSet={alarms.set}
+          onClear={alarms.remove}
+        />
+      ),
     });
   }
 

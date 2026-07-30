@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import PriceChart from "./PriceChart.jsx";
 import WatchButton from "./WatchButton.jsx";
+import AlarmCell from "./AlarmCell.jsx";
 import { useCoinAnalysis } from "../hooks/useCoinAnalysis.js";
 import { TIMEFRAMES } from "../lib/analysis/krakenSpot.js";
 import { linearRegressionChannel } from "../lib/analysis/ta.js";
@@ -16,7 +17,7 @@ const TREND_STYLE = {
 };
 const TREND_LABEL = { bullish: "Bullish", bearish: "Bearish", sideways: "Neutral" };
 
-export default function CoinAnalysis({ symbol: controlledSymbol, onSymbolChange, watchlist }) {
+export default function CoinAnalysis({ symbol: controlledSymbol, onSymbolChange, watchlist, watchlistAlarms }) {
   const [symbol, setSymbol] = useState(controlledSymbol || "BTC");
   const [symbolInput, setSymbolInput] = useState(symbol);
   const [timeframe, setTimeframe] = useState("4h");
@@ -64,6 +65,7 @@ export default function CoinAnalysis({ symbol: controlledSymbol, onSymbolChange,
   };
 
   const analysis = data?.analysis;
+  const currentPrice = data?.candles?.at(-1)?.close ?? null;
 
   return (
     <div className="rounded-card border border-edge bg-panel shadow-card">
@@ -80,6 +82,15 @@ export default function CoinAnalysis({ symbol: controlledSymbol, onSymbolChange,
             Analyze
           </button>
           {watchlist && <WatchButton active={watchlist.has(symbol)} onToggle={() => watchlist.toggle(symbol)} />}
+          {watchlistAlarms && (
+            <AlarmCell
+              symbol={symbol}
+              alarm={watchlistAlarms.alarms[symbol]}
+              currentPrice={currentPrice}
+              onSet={watchlistAlarms.set}
+              onClear={watchlistAlarms.remove}
+            />
+          )}
         </form>
 
         <div className="flex items-center gap-3">
