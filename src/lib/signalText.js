@@ -8,6 +8,12 @@
 const SIGNAL_LINE_RE =
   /(?:([A-Za-z][A-Za-z0-9]{1,9})\s+)?(LONG|SHORT|CLOSE)\s*@\s*\$?([\d,]+\.?\d*)\s*·\s*([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{1,2}):(\d{2})(?:\s*·\s*stop\s*\$?([\d,]+\.?\d*)\s*·\s*target\s*\$?([\d,]+\.?\d*))?/i;
 
+// Kraken's own order-fill wording, e.g. "Buy 0.23694451 ETH @ Limit 1,861.99
+// USDC" (also matches "Sell ... @ Market ..."). No stop/target/time in this
+// shape -- Kraken tickets don't carry them -- so those fields are left null
+// and the form keeps whatever it already had for them.
+const KRAKEN_TICKET_RE = /^\s*(Buy|Sell)\s+[\d,]+\.?\d*\s+([A-Za-z][A-Za-z0-9]{1,9})\s+@\s+(?:Limit|Market)\s+\$?([\d,]+\.?\d*)/i;
+
 const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
 
 function num(s) {
@@ -30,20 +36,36 @@ function inferEntryTime(monthName, day, hour, minute) {
 
 export function parseSignalText(text) {
   if (!text?.trim()) return null;
+
   const match = SIGNAL_LINE_RE.exec(text);
-  if (!match) return null;
+  if (match) {
+    const [, symbol, sideLabel, price, month, day, hour, minute, stop, target] = match;
+    const sideLower = sideLabel.toLowerCase();
+    const side = sideLower === "long" || sideLower === "short" ? sideLower : null;
+    const entryTime = inferEntryTime(month, day, hour, minute);
 
-  const [, symbol, sideLabel, price, month, day, hour, minute, stop, target] = match;
-  const sideLower = sideLabel.toLowerCase();
-  const side = sideLower === "long" || sideLower === "short" ? sideLower : null;
-  const entryTime = inferEntryTime(month, day, hour, minute);
+    return {
+      symbol: symbol ? symbol.toUpperCase() : null,
+      side,
+      entryPrice: num(price),
+      stopLoss: num(stop),
+      targetPrice: num(target),
+      entryTime: entryTime && !isNaN(entryTime.getTime()) ? entryTime.toISOString() : null,
+    };
+  }
 
-  return {
-    symbol: symbol ? symbol.toUpperCase() : null,
-    side,
-    entryPrice: num(price),
-    stopLoss: num(stop),
-    targetPrice: num(target),
-    entryTime: entryTime && !isNaN(entryTime.getTime()) ? entryTime.toISOString() : null,
-  };
+  const krakenMatch = KRAKEN_TICKET_RE.exec(text);
+  if (krakenMatch) {
+    const [, action, symbol, price] = krakenMatch;
+    return {
+      symbol: symbol.toUpperCase(),
+      side: action.toLowerCase() === "buy" ? "long" : "short",
+      entryPrice: num(price),
+      stopLoss: null,
+      targetPrice: null,
+      entryTime: null,
+    };
+  }
+
+  return null;
 }

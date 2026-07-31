@@ -22,6 +22,17 @@ function signalKey(signal, bar) {
 export function useSignalPolling(strategies, runCheck) {
   const lastPolledRef = useRef({});
   const lastNotifiedRef = useRef({});
+  // runCheck is a fresh closure every render (it reads current
+  // positionInputs), and it's owned by App.jsx -- so it changes identity on
+  // *any* App-level re-render, not just ones relevant to polling (e.g. the
+  // watchlist-alarms poller ticking every 30s). Keeping it out of the effect
+  // deps below and reading it via a ref instead means the setInterval isn't
+  // torn down and restarted on every unrelated re-render, which would
+  // otherwise starve it before it ever survives a full TICK_MS cycle.
+  const runCheckRef = useRef(runCheck);
+  useEffect(() => {
+    runCheckRef.current = runCheck;
+  });
 
   useEffect(() => {
     const tick = async () => {
@@ -35,7 +46,7 @@ export function useSignalPolling(strategies, runCheck) {
 
         let outcome;
         try {
-          outcome = await runCheck(strategy);
+          outcome = await runCheckRef.current(strategy);
         } catch {
           continue; // already surfaced as an error in the signals state by runCheck
         }
@@ -55,7 +66,7 @@ export function useSignalPolling(strategies, runCheck) {
 
     const id = setInterval(tick, TICK_MS);
     return () => clearInterval(id);
-  }, [strategies, runCheck]);
+  }, [strategies]);
 }
 
 const SIGNAL_TEXT = { long: "LONG", short: "SHORT", close: "CLOSE" };
