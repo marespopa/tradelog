@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ensureNotificationPermission } from "../hooks/useSignalPolling.js";
+import { ensureNotificationPermission } from "../lib/notify.js";
 import { alarmExhausted } from "../hooks/useWatchlistAlarms.js";
 import BellIcon from "./BellIcon.jsx";
 import { fmtPrice } from "../lib/format.js";

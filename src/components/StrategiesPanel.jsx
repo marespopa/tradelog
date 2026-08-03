@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import DataTable from "./DataTable.jsx";
-import { ensureNotificationPermission, sendTestNotification } from "../hooks/useSignalPolling.js";
+import { sendTestNotification } from "../hooks/useSignalPolling.js";
+import { ensureNotificationPermission } from "../lib/notify.js";
 import { normalizeSignal } from "../lib/strategySignal.js";
 import { TIMEFRAMES } from "../lib/analysis/okx.js";
 import { getCachedCandles } from "../lib/candleCache.js";

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { notifyOS, ensureNotificationPermission } from "../lib/notify.js";
 import { normalizeSignal } from "../lib/strategySignal.js";
 import { fmtPrice } from "../lib/format.js";
 
@@ -72,24 +72,11 @@ export function useSignalPolling(strategies, runCheck) {
 const SIGNAL_TEXT = { long: "LONG", short: "SHORT", close: "CLOSE" };
 
 async function notify(strategy, signal, bar, { stop, target } = {}) {
-  // Native OS toast via the Tauri notification plugin, not the webview's Web
-  // Notification API -- the latter's permission model only ever prompts
-  // once and has no way to re-ask after a denial (or after WebView2 silently
-  // defaults to denied), whereas this goes through Windows' own toast
-  // notification system and respects OS-level notification settings instead.
-  if (!(await isPermissionGranted())) return;
   const levels = stop != null && target != null ? ` — suggested stop ${fmtPrice(stop)}, target ${fmtPrice(target)}` : "";
-  sendNotification({
-    title: `${strategy.name || strategy.symbol} — ${SIGNAL_TEXT[signal]}`,
-    body: `${strategy.symbol} (${strategy.timeframe}) just signaled ${SIGNAL_TEXT[signal]} on the ${new Date(bar.time).toLocaleString()} bar${levels}.`,
-  });
-}
-
-// Must be called from inside a user-gesture handler (e.g. a checkbox
-// onChange) so the OS permission prompt actually surfaces.
-export async function ensureNotificationPermission() {
-  if (await isPermissionGranted()) return "granted";
-  return requestPermission();
+  await notifyOS(
+    `${strategy.name || strategy.symbol} — ${SIGNAL_TEXT[signal]}`,
+    `${strategy.symbol} (${strategy.timeframe}) just signaled ${SIGNAL_TEXT[signal]} on the ${new Date(bar.time).toLocaleString()} bar${levels}.`
+  );
 }
 
 // Fires the exact same OS toast a real signal would -- using the real

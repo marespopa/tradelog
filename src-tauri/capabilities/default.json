@@ -13,7 +13,8 @@
       "identifier": "http:default",
       "allow": [
         { "url": "https://api.kraken.com/*" },
-        { "url": "https://futures.kraken.com/*" }
+        { "url": "https://futures.kraken.com/*" },
+        { "url": "https://generativelanguage.googleapis.com/*" }
       ]
     }
   ]

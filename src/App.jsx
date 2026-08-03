@@ -5,13 +5,17 @@ import { useTrades } from "./hooks/useTrades.js";
 import { useStrategies } from "./hooks/useStrategies.js";
 import { useStrategySignals } from "./hooks/useStrategySignals.js";
 import { useWatchlistAlarms } from "./hooks/useWatchlistAlarms.js";
+import { usePortfolio } from "./hooks/usePortfolio.js";
+import { useGeminiChat } from "./hooks/useGeminiChat.js";
 import AlarmsMenu from "./components/AlarmsMenu.jsx";
 
 const CoinAnalysis = lazy(() => import("./components/CoinAnalysis.jsx"));
 const MarketPanel = lazy(() => import("./components/MarketPanel.jsx"));
 const WatchlistPanel = lazy(() => import("./components/WatchlistPanel.jsx"));
 const TradesPanel = lazy(() => import("./components/TradesPanel.jsx"));
+const PortfolioPanel = lazy(() => import("./components/PortfolioPanel.jsx"));
 const StrategiesPanel = lazy(() => import("./components/StrategiesPanel.jsx"));
+const ChatPanel = lazy(() => import("./components/ChatPanel.jsx"));
 
 // Scan the top-volume market for position-trading candidates, then act on
 // what you find. Analysis (chart/stats/sizing) isn't a nav tab — it's a
@@ -20,12 +24,14 @@ const StrategiesPanel = lazy(() => import("./components/StrategiesPanel.jsx"));
 // see scripts/backtest-long-term-holds.js — so it was retired from the UI
 // the same way the beta-neutral Hedged tab was before it. Kept for
 // reference, not deleted.)
-const TABS = new Set(["market", "watchlist", "trades", "strategies", "analysis"]);
+const TABS = new Set(["market", "watchlist", "trades", "portfolio", "strategies", "chat", "analysis"]);
 const NAV_TABS = [
   { key: "market", label: "Market" },
   { key: "watchlist", label: "Watchlist" },
   { key: "trades", label: "Trades" },
+  { key: "portfolio", label: "Portfolio" },
   { key: "strategies", label: "Strategies" },
+  { key: "chat", label: "Chat" },
 ];
 
 function readUrlState() {
@@ -47,6 +53,12 @@ export default function App() {
   // strategySignals above: its background poller (and thus notifications)
   // needs to keep running while any other tab is open, not just Watchlist.
   const watchlistAlarms = useWatchlistAlarms();
+  const portfolio = usePortfolio();
+  // Also lives here (not inside ChatPanel) so the conversation survives
+  // switching tabs -- App.jsx's <Suspense> block below only mounts the
+  // active tab's panel, so a hook owned by ChatPanel itself would be wiped
+  // on every tab switch away and back.
+  const chat = useGeminiChat();
   const [{ tab, coin }, setUrlState] = useState(readUrlState);
   // Which nav tab to return to from analysis — set whenever a row is
   // clicked from scan or watchlist, so "Back" lands wherever you came from.
@@ -137,7 +149,13 @@ export default function App() {
 
           {tab === "trades" && <TradesPanel trades={trades} />}
 
+          {tab === "portfolio" && (
+            <PortfolioPanel portfolio={portfolio} onSelectSymbol={(symbol) => selectCoin(symbol, "portfolio")} />
+          )}
+
           {tab === "strategies" && <StrategiesPanel strategies={strategies} strategySignals={strategySignals} />}
+
+          {tab === "chat" && <ChatPanel chat={chat} portfolio={portfolio} />}
 
           {tab === "analysis" && (
             <>

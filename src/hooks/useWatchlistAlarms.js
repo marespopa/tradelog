@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isPermissionGranted, sendNotification } from "@tauri-apps/plugin-notification";
+import { notifyOS } from "../lib/notify.js";
 import { getStore } from "../lib/tauriStore";
 import { scanInBatches, fetchTickerPrice } from "../lib/analysis/krakenSpot.js";
 import { fmtPrice } from "../lib/format.js";
@@ -53,18 +53,11 @@ function resetSide(alarm, price) {
 }
 
 async function notifyAlarm(symbol, price, alarm) {
-  // Same native-OS-toast rationale as useSignalPolling's notify(): the
-  // Tauri plugin respects OS notification settings and can be re-requested
-  // after a denial, unlike the webview's Web Notification API.
-  if (!(await isPermissionGranted())) return;
   const verb = alarm.mode === "exact" ? "crossed" : alarm.mode === "below" ? "dropped to" : "rose to";
   const remaining = alarm.repeat - alarm.firedCount;
   const repeatNote =
     alarm.repeat > 1 ? ` (${alarm.firedCount}/${alarm.repeat}${remaining > 0 ? " — will notify again once it resets" : ", done"})` : "";
-  sendNotification({
-    title: `${symbol} price alarm`,
-    body: `${symbol} ${verb} ${fmtPrice(price)} (target ${fmtPrice(alarm.price)})${repeatNote}.`,
-  });
+  await notifyOS(`${symbol} price alarm`, `${symbol} ${verb} ${fmtPrice(price)} (target ${fmtPrice(alarm.price)})${repeatNote}.`);
 }
 
 // Price alarms for watchlist/analysis coins: set a target price, a

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ensureNotificationPermission } from "../hooks/useSignalPolling.js";
+import { ensureNotificationPermission } from "../lib/notify.js";
 import { alarmExhausted } from "../hooks/useWatchlistAlarms.js";
 import BellIcon from "./BellIcon.jsx";
 import { fmtPrice } from "../lib/format.js";
@@ -20,6 +20,7 @@ export default function AlarmCell({ symbol, alarm, currentPrice, onSet, onClear 
   const [price, setPrice] = useState("");
   const [mode, setMode] = useState("above");
   const [repeat, setRepeat] = useState("1");
+  const [invalid, setInvalid] = useState(false);
   const ref = useRef(null);
 
   useEffect(() => {
@@ -36,6 +37,7 @@ export default function AlarmCell({ symbol, alarm, currentPrice, onSet, onClear 
     setPrice(alarm ? String(alarm.price) : currentPrice != null ? String(currentPrice) : "");
     setMode(alarm?.mode ?? "above");
     setRepeat(String(alarm?.repeat ?? 1));
+    setInvalid(false);
     setOpen(true);
   };
 
@@ -43,12 +45,17 @@ export default function AlarmCell({ symbol, alarm, currentPrice, onSet, onClear 
     e.preventDefault();
     e.stopPropagation();
     const priceNum = parseFloat(price);
-    if (!isNaN(priceNum) && priceNum > 0) {
-      onSet(symbol, { price: priceNum, mode, repeat });
-      // Fired from this submit's user gesture so the OS permission prompt
-      // can actually surface (see ensureNotificationPermission's contract).
-      ensureNotificationPermission();
+    if (isNaN(priceNum) || priceNum <= 0) {
+      // Previously closed the popover here too, so an empty/invalid price
+      // (e.g. currentPrice hadn't loaded yet, seeding the field blank)
+      // silently dropped the alarm with no sign anything went wrong.
+      setInvalid(true);
+      return;
     }
+    onSet(symbol, { price: priceNum, mode, repeat });
+    // Fired from this submit's user gesture so the OS permission prompt
+    // can actually surface (see ensureNotificationPermission's contract).
+    ensureNotificationPermission();
     setOpen(false);
   };
 
@@ -103,9 +110,15 @@ export default function AlarmCell({ symbol, alarm, currentPrice, onSet, onClear 
               step="any"
               autoFocus
               value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              className="rounded border border-edge bg-bg px-2 py-1 text-[12px] text-ink outline-none focus:border-accent"
+              onChange={(e) => {
+                setPrice(e.target.value);
+                setInvalid(false);
+              }}
+              className={`rounded border bg-bg px-2 py-1 text-[12px] text-ink outline-none focus:border-accent ${
+                invalid ? "border-position-short" : "border-edge"
+              }`}
             />
+            {invalid && <span className="text-position-short">Enter a price above 0.</span>}
           </label>
           <label className="flex flex-col gap-1 text-[11px] text-dim">
             Condition
