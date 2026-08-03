@@ -1,7 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { useTheme } from "./hooks/useTheme.js";
 import { useWatchlist } from "./hooks/useWatchlist.js";
-import { useTrades } from "./hooks/useTrades.js";
 import { useStrategies } from "./hooks/useStrategies.js";
 import { useStrategySignals } from "./hooks/useStrategySignals.js";
 import { useWatchlistAlarms } from "./hooks/useWatchlistAlarms.js";
@@ -12,7 +11,6 @@ import AlarmsMenu from "./components/AlarmsMenu.jsx";
 const CoinAnalysis = lazy(() => import("./components/CoinAnalysis.jsx"));
 const MarketPanel = lazy(() => import("./components/MarketPanel.jsx"));
 const WatchlistPanel = lazy(() => import("./components/WatchlistPanel.jsx"));
-const TradesPanel = lazy(() => import("./components/TradesPanel.jsx"));
 const PortfolioPanel = lazy(() => import("./components/PortfolioPanel.jsx"));
 const StrategiesPanel = lazy(() => import("./components/StrategiesPanel.jsx"));
 const ChatPanel = lazy(() => import("./components/ChatPanel.jsx"));
@@ -24,13 +22,12 @@ const ChatPanel = lazy(() => import("./components/ChatPanel.jsx"));
 // see scripts/backtest-long-term-holds.js — so it was retired from the UI
 // the same way the beta-neutral Hedged tab was before it. Kept for
 // reference, not deleted.)
-const TABS = new Set(["market", "watchlist", "trades", "portfolio", "strategies", "chat", "analysis"]);
+const TABS = new Set(["market", "watchlist", "portfolio", "strategies", "chat", "analysis"]);
 const NAV_TABS = [
   { key: "market", label: "Market" },
   { key: "watchlist", label: "Watchlist" },
-  { key: "trades", label: "Trades" },
   { key: "portfolio", label: "Portfolio" },
-  { key: "strategies", label: "Strategies" },
+  { key: "strategies", label: "Portfolio Strategies" },
   { key: "chat", label: "Chat" },
 ];
 
@@ -43,7 +40,6 @@ function readUrlState() {
 export default function App() {
   const { preference, cycle } = useTheme();
   const watchlist = useWatchlist();
-  const trades = useTrades();
   const strategies = useStrategies();
   // Owned here (not by StrategiesPanel) so its background poller -- and thus
   // notifications -- keeps running while any other tab is open, not just
@@ -146,8 +142,6 @@ export default function App() {
               onSelectSymbol={(symbol) => selectCoin(symbol, "watchlist")}
             />
           )}
-
-          {tab === "trades" && <TradesPanel trades={trades} />}
 
           {tab === "portfolio" && (
             <PortfolioPanel portfolio={portfolio} onSelectSymbol={(symbol) => selectCoin(symbol, "portfolio")} />

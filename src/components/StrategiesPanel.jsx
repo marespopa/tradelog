@@ -939,7 +939,7 @@ export default function StrategiesPanel({ strategies, strategySignals }) {
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-[14px] font-semibold">Strategies</h2>
+          <h2 className="text-[14px] font-semibold">Portfolio Strategies</h2>
           <p className="text-[11px] text-dim">Write a bar-by-bar rule and backtest it against real OKX history, right here.</p>
         </div>
         <div className="flex items-center gap-2">

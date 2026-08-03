@@ -4,9 +4,9 @@ import { getStore } from "../lib/tauriStore";
 const STRATEGIES_KEY = "strategies";
 
 // User-authored backtest strategies (name/symbol/timeframe/code), persisted
-// the same way as useTrades/useWatchlist — the code itself is just a string
-// until it's run, so storing it is no different from storing any other
-// journal text.
+// the same way as useWatchlist — the code itself is just a string until
+// it's run, so storing it is no different from storing any other journal
+// text.
 export function useStrategies() {
   const [strategies, setStrategies] = useState([]);
   const loaded = useRef(false);

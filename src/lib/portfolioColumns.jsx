@@ -1,10 +1,10 @@
 import { fmt, fmtPrice, fmtUsd, fmtDateTime, pnlClass } from "./format.js";
 
-// Holdings table -- mirrors tradeColumns.jsx's buildTradeColumns. Computed
-// fields (costBasis/currentValue/pnlUsd/pnlPct/allocationPct) are expected
-// to already be merged onto each row by PortfolioPanel before this is
-// called, since allocationPct needs the portfolio total, which no single
-// row has access to on its own.
+// Holdings table -- same column-builder + DataTable pattern used elsewhere
+// in the app. Computed fields (costBasis/currentValue/pnlUsd/pnlPct/
+// allocationPct) are expected to already be merged onto each row by
+// PortfolioPanel before this is called, since allocationPct needs the
+// portfolio total, which no single row has access to on its own.
 export function buildPortfolioColumns(onRemove, onEdit) {
   return [
     { key: "symbol", title: "Asset", filter: "text", formatter: (r) => <span className="font-medium">{r.symbol}</span> },

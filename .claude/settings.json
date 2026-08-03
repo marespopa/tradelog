@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tasklist //FI \"IMAGENAME eq app.exe\")",
+      "Bash(tasklist //FI \"IMAGENAME eq Market Scanner.exe\")"
+    ]
+  }
+}

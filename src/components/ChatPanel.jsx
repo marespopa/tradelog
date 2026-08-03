@@ -7,8 +7,7 @@ import RotatingLoadingText from "./RotatingLoadingText.jsx";
 const inputClass = "rounded-lg border border-edge bg-bg px-3 py-1.5 text-[13px] text-ink outline-none focus:border-accent";
 
 // Plain-text portfolio+price snapshot handed to Gemini as context. Local to
-// this panel (single consumer) rather than a lib module -- same as
-// TradesPanel's local form-only helpers.
+// this panel (single consumer) rather than a lib module.
 function buildContextText(holdings, livePrices) {
   if (!holdings.length) return "The user's portfolio is currently empty.";
   const lines = holdings.map((h) => {

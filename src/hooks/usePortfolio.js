@@ -12,10 +12,9 @@ function deriveHoldingFields(input) {
 }
 
 // Manually tracked buy-and-hold lots (symbol/quantity/avg cost), persisted
-// the same way as useTrades/useWatchlist. Deliberately not merged on a
-// repeated symbol -- same convention as useTrades treating every entry as
-// its own row -- so DCA buys at different prices each keep their own true
-// cost basis instead of being averaged away.
+// the same way as useWatchlist. Deliberately not merged on a repeated
+// symbol -- avoids weighted-average-cost merge math and its edge cases, and
+// keeps each lot's own true cost basis for DCA buys at different prices.
 export function usePortfolio() {
   const [holdings, setHoldings] = useState([]);
   const loaded = useRef(false);
