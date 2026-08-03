@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLivePrices } from "../hooks/useLivePrices.js";
 import { fmtPrice, fmtUsd, fmtDateTime } from "../lib/format.js";
+import { listModels } from "../lib/gemini.js";
 import RotatingLoadingText from "./RotatingLoadingText.jsx";
 
 const inputClass = "rounded-lg border border-edge bg-bg px-3 py-1.5 text-[13px] text-ink outline-none focus:border-accent";
@@ -24,6 +25,34 @@ function buildContextText(holdings, livePrices) {
 
 function SettingsDialog({ apiKey, model, onSave, onCancel }) {
   const [form, setForm] = useState({ apiKey, model });
+  // Live catalog from the API (see gemini.js's listModels) rather than a
+  // hardcoded list baked into the app -- Google ships new models often
+  // enough that anything hardcoded here would just go stale. The manual
+  // text input stays the source of truth either way; this is just a
+  // convenience picker for it.
+  const [models, setModels] = useState([]);
+  const [modelsStatus, setModelsStatus] = useState("idle"); // idle | loading | error
+  const [modelsError, setModelsError] = useState(null);
+
+  const fetchModels = async () => {
+    if (!form.apiKey) {
+      setModelsStatus("error");
+      setModelsError("Enter an API key first.");
+      return;
+    }
+    setModelsStatus("loading");
+    setModelsError(null);
+    try {
+      const list = await listModels(form.apiKey);
+      setModels(list);
+      setModelsStatus("idle");
+      if (!list.length) setModelsError("No chat-capable models found for this key.");
+    } catch (err) {
+      setModelsStatus("error");
+      setModelsError(err.message || "Couldn't fetch models.");
+    }
+  };
+
   return createPortal(
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4">
       <form
@@ -44,9 +73,39 @@ function SettingsDialog({ apiKey, model, onSave, onCancel }) {
           />
         </label>
         <label className="flex flex-col gap-1 text-[11px] text-dim">
-          Model
+          <span className="flex items-center justify-between">
+            Model
+            <button
+              type="button"
+              onClick={fetchModels}
+              disabled={modelsStatus === "loading"}
+              className="text-[11px] font-medium text-accent hover:opacity-80 disabled:opacity-40"
+            >
+              {modelsStatus === "loading" ? "Fetching…" : "Fetch latest models"}
+            </button>
+          </span>
           <input type="text" value={form.model} onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))} className={inputClass} />
         </label>
+        {models.length > 0 && (
+          <label className="flex flex-col gap-1 text-[11px] text-dim">
+            Pick from {models.length} available
+            <select
+              value=""
+              onChange={(e) => {
+                if (e.target.value) setForm((f) => ({ ...f, model: e.target.value }));
+              }}
+              className={inputClass}
+            >
+              <option value="">Select a model…</option>
+              {models.map((m) => (
+                <option key={m.name} value={m.name}>
+                  {m.displayName} ({m.name})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {modelsError && <p className="text-[11px] text-position-short">{modelsError}</p>}
         <p className="text-[11px] text-dim">Stored in plain text in this app's local data file — same as everything else it stores.</p>
         <div className="flex items-center gap-2">
           <button type="submit" className="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:opacity-90">
